@@ -33,11 +33,34 @@
 <section>
   <h2>Contactos ({{ contacts|length }})</h2>
   <table>
-    <thead><tr><th>Nome</th><th>Email</th><th>Empresa</th><th>Criado em (UTC)</th></tr></thead>
+    <thead><tr><th>Nome</th><th>Emails</th><th>Empresa</th><th>Criado em (UTC)</th></tr></thead>
     <tbody>
     {% for c in contacts %}
-      <tr><td>{{ c.first_name }} {{ c.last_name }}</td><td>{{ c.email }}</td>
-          <td>{{ c.company_name or '—' }}</td><td>{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}</td></tr>
+      <tr>
+        <td>{{ c.first_name }} {{ c.last_name }}</td>
+        <td>
+          <ul class="emails">
+          {% for e in c.emails %}
+            <li>{{ e }}
+            {% if loop.first %}<span class="badge">principal</span>
+            {% else %}
+              <form method="post" action="/contacts/{{ c.id }}/emails/primary" class="inline">
+                <input type="hidden" name="email" value="{{ e }}"><button>tornar principal</button>
+              </form>
+              <form method="post" action="/contacts/{{ c.id }}/emails/remove" class="inline">
+                <input type="hidden" name="email" value="{{ e }}"><button>remover</button>
+              </form>
+            {% endif %}
+            </li>
+          {% endfor %}
+          </ul>
+          <form method="post" action="/contacts/{{ c.id }}/emails" class="inline">
+            <input type="email" name="email" placeholder="novo email" required><button>Adicionar</button>
+          </form>
+        </td>
+        <td>{{ c.company_name or '—' }}</td>
+        <td>{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      </tr>
     {% else %}
       <tr><td colspan="4">Ainda não há contactos.</td></tr>
     {% endfor %}

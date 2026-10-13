@@ -1,24 +1,57 @@
 import sqlite3
 from pathlib import Path
 
-SCHEMA = """
+SCHEMA_VERSION = 2
+
+
+class MigrationError(RuntimeError):
+    pass
+
+
+COMPANIES_DDL = """
 CREATE TABLE IF NOT EXISTS companies (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     name    TEXT NOT NULL CHECK (length(trim(name)) > 0),
     website TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_companies_name ON companies (lower(name));
+"""
 
-CREATE TABLE IF NOT EXISTS contacts (
+CONTACTS_DDL = """
+CREATE TABLE contacts (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    email      TEXT NOT NULL UNIQUE CHECK (email = lower(trim(email))),
     first_name TEXT NOT NULL,
     last_name  TEXT NOT NULL,
     company_id INTEGER REFERENCES companies (id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now'))
 );
-CREATE INDEX IF NOT EXISTS ix_contacts_company ON contacts (company_id);
+CREATE INDEX ix_contacts_company ON contacts (company_id);
+
+CREATE TABLE contact_emails (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    contact_id INTEGER NOT NULL REFERENCES contacts (id) ON DELETE CASCADE,
+    email      TEXT NOT NULL UNIQUE CHECK (email = lower(trim(email))),
+    is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1))
+);
+CREATE INDEX ix_contact_emails_contact ON contact_emails (contact_id);
+CREATE UNIQUE INDEX ux_contact_one_primary ON contact_emails (contact_id) WHERE is_primary = 1;
 """
+
+MIGRATION_V1_TO_V2 = (
+    "BEGIN;\n"
+    "DROP INDEX IF EXISTS ix_contacts_company;\n"
+    "ALTER TABLE contacts RENAME TO contacts_v1;\n"
+    + CONTACTS_DDL
+    + """
+INSERT INTO contacts (id, first_name, last_name, company_id, created_at)
+    SELECT id, first_name, last_name, company_id, created_at FROM contacts_v1 ORDER BY id;
+INSERT INTO contact_emails (contact_id, email, is_primary)
+    SELECT id, email, 1 FROM contacts_v1 ORDER BY id;
+DROP TABLE contacts_v1;
+PRAGMA user_version = 2;
+COMMIT;
+"""
+)
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
@@ -30,6 +63,38 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def _contacts_has_email_column(conn: sqlite3.Connection) -> bool:
+    return any(r["name"] == "email" for r in conn.execute("PRAGMA table_info(contacts)"))
+
+
+def _orphan_contact_ids(conn: sqlite3.Connection) -> list[int]:
+    rows = conn.execute(
+        "SELECT c.id FROM contacts c LEFT JOIN companies co ON co.id = c.company_id "
+        "WHERE c.company_id IS NOT NULL AND co.id IS NULL ORDER BY c.id"
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA)
-    conn.commit()
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version >= SCHEMA_VERSION:
+        return
+    try:
+        if _contacts_has_email_column(conn):
+            orphans = _orphan_contact_ids(conn)
+            if orphans:
+                ids = ", ".join(str(i) for i in orphans)
+                raise MigrationError(
+                    "Migração v1->v2 abortada: contactos com empresa inexistente "
+                    f"(ids: {ids}). Corrija ou remova estes registos e volte a arrancar; "
+                    "a base de dados não foi alterada."
+                )
+            conn.executescript(MIGRATION_V1_TO_V2)
+        else:
+            conn.executescript(
+                COMPANIES_DDL + CONTACTS_DDL + f"PRAGMA user_version = {SCHEMA_VERSION};"
+            )
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise

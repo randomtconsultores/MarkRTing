@@ -4,6 +4,12 @@ from datetime import datetime
 from ..domain.contact import Company, Contact, DuplicateEmailError, ValidationError
 
 
+def _translate(exc: sqlite3.IntegrityError) -> ValidationError:
+    if "contact_emails.email" in str(exc):
+        return DuplicateEmailError("Já existe um contacto com esse email.")
+    return ValidationError("Violação de integridade dos dados.")
+
+
 class ContactRepository:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
@@ -31,42 +37,89 @@ class ContactRepository:
 
     def email_exists(self, email: str) -> bool:
         return self.conn.execute(
-            "SELECT 1 FROM contacts WHERE email = ?", (email,)
+            "SELECT 1 FROM contact_emails WHERE email = ?", (email,)
         ).fetchone() is not None
 
     def add_contact(self, email, first_name, last_name, company_id=None) -> Contact:
         try:
             with self.conn:
                 cur = self.conn.execute(
-                    "INSERT INTO contacts (email, first_name, last_name, company_id) "
-                    "VALUES (?, ?, ?, ?)",
-                    (email, first_name, last_name, company_id),
+                    "INSERT INTO contacts (first_name, last_name, company_id) VALUES (?, ?, ?)",
+                    (first_name, last_name, company_id),
+                )
+                contact_id = cur.lastrowid
+                self.conn.execute(
+                    "INSERT INTO contact_emails (contact_id, email, is_primary) VALUES (?, ?, 1)",
+                    (contact_id, email),
                 )
         except sqlite3.IntegrityError as exc:
-            if "contacts.email" in str(exc):
-                raise DuplicateEmailError("Já existe um contacto com esse email.") from exc
-            raise ValidationError("Violação de integridade dos dados.") from exc
-        return self.get_contact(cur.lastrowid)
+            raise _translate(exc) from exc
+        return self.get_contact(contact_id)
+
+    def add_email(self, contact_id: int, email: str) -> None:
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "INSERT INTO contact_emails (contact_id, email, is_primary) VALUES (?, ?, 0)",
+                    (contact_id, email),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise _translate(exc) from exc
+
+    def set_primary_email(self, contact_id: int, email: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE contact_emails SET is_primary = 0 WHERE contact_id = ?", (contact_id,)
+            )
+            cur = self.conn.execute(
+                "UPDATE contact_emails SET is_primary = 1 WHERE contact_id = ? AND email = ?",
+                (contact_id, email),
+            )
+            if cur.rowcount != 1:
+                raise ValidationError("O email não pertence a este contacto.")
+
+    def remove_email(self, contact_id: int, email: str) -> None:
+        with self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM contact_emails WHERE contact_id = ? AND email = ? AND is_primary = 0",
+                (contact_id, email),
+            )
+            if cur.rowcount != 1:
+                raise ValidationError("Não foi possível remover o email.")
 
     def get_contact(self, contact_id: int) -> Contact | None:
         row = self.conn.execute(self._SELECT + " WHERE c.id = ?", (contact_id,)).fetchone()
-        return self._to_contact(row) if row else None
+        if row is None:
+            return None
+        emails = self._load_emails(" WHERE contact_id = ?", (contact_id,))
+        return self._to_contact(row, emails)
 
     def list_contacts(self) -> list[Contact]:
         rows = self.conn.execute(self._SELECT + " ORDER BY c.created_at DESC, c.id DESC").fetchall()
-        return [self._to_contact(r) for r in rows]
+        emails = self._load_emails()
+        return [self._to_contact(r, emails) for r in rows]
 
     _SELECT = (
-        "SELECT c.id, c.email, c.first_name, c.last_name, c.company_id, c.created_at, "
+        "SELECT c.id, c.first_name, c.last_name, c.company_id, c.created_at, "
         "co.name AS company_name FROM contacts c "
         "LEFT JOIN companies co ON co.id = c.company_id"
     )
 
+    def _load_emails(self, where: str = "", params: tuple = ()) -> dict[int, list[str]]:
+        rows = self.conn.execute(
+            "SELECT contact_id, email FROM contact_emails" + where + " ORDER BY is_primary DESC, id",
+            params,
+        ).fetchall()
+        out: dict[int, list[str]] = {}
+        for r in rows:
+            out.setdefault(r["contact_id"], []).append(r["email"])
+        return out
+
     @staticmethod
-    def _to_contact(r) -> Contact:
+    def _to_contact(r, emails: dict[int, list[str]]) -> Contact:
         return Contact(
-            id=r["id"], email=r["email"], first_name=r["first_name"],
-            last_name=r["last_name"], company_id=r["company_id"],
-            company_name=r["company_name"],
+            id=r["id"], first_name=r["first_name"], last_name=r["last_name"],
+            emails=tuple(emails.get(r["id"], [])),
+            company_id=r["company_id"], company_name=r["company_name"],
             created_at=datetime.fromisoformat(r["created_at"]),
         )
