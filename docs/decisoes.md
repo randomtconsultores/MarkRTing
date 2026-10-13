@@ -72,7 +72,7 @@ Pergunta: quanto código muda ao acrescentar PostgreSQL como segunda base de dad
 
 **Validado**
 
-- Testes do serviço, da web e de esquema com SQLite e PostgreSQL: 86 aprovados.
+- Testes do serviço, da web e de esquema com SQLite e PostgreSQL: 86 aprovados (PR #2).
 
 ## Correção - Ligação por pedido
 
@@ -88,16 +88,18 @@ Um teste com 16 threads sobre um serviço com uma única ligação falhou nos do
 - Uma ligação por pedido. Uma dependência do FastAPI (`get_service`) abre a ligação, constrói o serviço e fecha-a no fim, nos dois backends. O esquema é criado ou migrado uma vez, no arranque.
 - SQLite com `timeout=30`: com várias ligações, os escritores esperam pelo bloqueio de escrita do ficheiro.
 - `create_app(service=...)` mantém-se para os testes, que partilham um serviço; `:memory:` deixa de servir com `db_path`, porque cada ligação veria uma base diferente.
+- `requires-python` baixa de `>=3.13` para `>=3.12`, porque o ambiente de desenvolvimento (container Alpine) usa Python 3.12 e os testes foram validados nessa versão. Contraria o «Python 3.13+» do plano inicial.
 
 **Alternativas rejeitadas**
 
 - `Lock` global à volta do repositório: serializa tudo e mantém o estado partilhado, escondendo o problema em vez de o resolver.
-- Pool de ligações: aceita, mas adiada. O pool reduz o custo de abrir ligações, não corrige a correção; acrescentaria uma dependência sem necessidade medida.
+- Pool de ligações: aceita, mas adiada. O pool reduz o custo de abrir ligações, mas não resolve o problema de concorrência; acrescentaria uma dependência sem necessidade medida.
 
 **Teste**
 
 - `tests/test_concurrency.py`: em cada ronda, 12 threads fazem pedidos HTTP a criar o mesmo email ao mesmo tempo. Exige exatamente um sucesso por ronda, 422 «Já existe» para os restantes, nenhum erro 500, e uma listagem final com um contacto por ronda.
 
-**Por validar**
+**Validado**
 
-- O teste novo foi escrito antes de ser executado; o resultado da execução nos dois backends fica registado no pull request.
+- Antes da correção, o teste de concorrência falhou nos dois backends (commit `5123901`).
+- Depois da correção, o teste de concorrência passa em SQLite e em PostgreSQL, e a suíte completa dá 88 testes aprovados, com os dois backends ativos, em Python 3.12.
