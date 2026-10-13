@@ -1,10 +1,11 @@
 import os
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
+from itertools import zip_longest
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -12,13 +13,56 @@ from fastapi.templating import Jinja2Templates
 from .database import connect as sqlite_connect
 from .database import init_db as sqlite_init_db
 from .domain.contact import ValidationError
+from .domain.segment import Criterion
 from .repositories.contact_repository import ContactRepository
+from .repositories.segment_repository import SegmentRepository
 from .services.contact_service import ContactService
+from .services.segment_service import SegmentService
 
 BASE = Path(__file__).parent
 DEFAULT_DB = Path(os.environ.get("MINI_MARKETO_DB", BASE.parent.parent / "data" / "mini_marketo.db"))
 
 ServiceFactory = Callable[[], AbstractContextManager[ContactService]]
+SegmentFactory = Callable[[], AbstractContextManager[SegmentService]]
+
+FORM_ROWS = 10
+FIELD_LABELS = {
+    "first_name": "Nome",
+    "last_name": "Apelido",
+    "email": "Email",
+    "company": "Empresa",
+    "created_at": "Criado em (UTC)",
+}
+OPERATOR_LABELS = {
+    "is": "é",
+    "is_not": "não é",
+    "contains": "contém",
+    "starts_with": "começa por",
+    "is_empty": "está vazio",
+    "is_not_empty": "não está vazio",
+    "before": "antes de",
+    "after": "depois de",
+}
+
+
+def criteria_from_rows(fields: list[str], operators: list[str], values: list[str]) -> list[Criterion]:
+    """Converte as linhas do formulário em critérios; linhas sem campo são ignoradas."""
+    if not (len(fields) == len(operators) == len(values)):
+        raise ValidationError("Formulário de critérios inválido.")
+    return [Criterion(f, o, v) for f, o, v in zip(fields, operators, values) if f.strip()]
+
+
+def form_rows(fields=(), operators=(), values=()) -> list[dict]:
+    rows = [
+        {"field": f, "operator": o or "is", "value": v}
+        for f, o, v in zip_longest(fields, operators, values, fillvalue="")
+    ][:FORM_ROWS]
+    rows += [{"field": "", "operator": "is", "value": ""} for _ in range(FORM_ROWS - len(rows))]
+    return rows
+
+
+def new_segment_form() -> dict:
+    return {"name": "", "description": "", "match_mode": "all", "rows": form_rows()}
 
 
 def build_service_factory(db_path: str | Path, database_url: str | None = None) -> ServiceFactory:
@@ -70,18 +114,58 @@ def build_service_factory(db_path: str | Path, database_url: str | None = None) 
     return open_service
 
 
+def build_segment_service_factory(
+    db_path: str | Path, database_url: str | None = None
+) -> SegmentFactory:
+    """Como build_service_factory, mas sem criar/migrar o esquema (já feito por ela)."""
+    if database_url:
+        from .postgres_database import connect
+        from .repositories.postgres_contact_repository import PostgresContactRepository
+        from .repositories.postgres_segment_repository import PostgresSegmentRepository
+
+        @contextmanager
+        def open_segments():
+            conn = connect(database_url)
+            try:
+                yield SegmentService(
+                    PostgresSegmentRepository(conn), PostgresContactRepository(conn)
+                )
+            finally:
+                conn.close()
+
+        return open_segments
+
+    @contextmanager
+    def open_segments():
+        conn = sqlite_connect(db_path)
+        try:
+            yield SegmentService(SegmentRepository(conn), ContactRepository(conn))
+        finally:
+            conn.close()
+
+    return open_segments
+
+
 def create_app(
     db_path: str | Path = DEFAULT_DB,
     database_url: str | None = None,
     service: ContactService | None = None,
+    segment_service: SegmentService | None = None,
 ) -> FastAPI:
     if service is not None:
-        # Serviço injetado (testes): partilhado, não é aberto nem fechado por pedido.
+        # Serviços injetados (testes): partilhados, não são abertos nem fechados por pedido.
         @contextmanager
         def open_service():
             yield service
+
+        @contextmanager
+        def open_segments():
+            if segment_service is None:
+                raise RuntimeError("create_app: segment_service não foi injetado.")
+            yield segment_service
     else:
         open_service = build_service_factory(db_path, database_url)
+        open_segments = build_segment_service_factory(db_path, database_url)
 
     templates = Jinja2Templates(directory=str(BASE / "templates"))
 
@@ -92,13 +176,27 @@ def create_app(
         with open_service() as svc:
             yield svc
 
+    def get_segments() -> Iterator[SegmentService]:
+        with open_segments() as svc:
+            yield svc
+
     Svc = Annotated[ContactService, Depends(get_service)]
+    Seg = Annotated[SegmentService, Depends(get_segments)]
 
     def page(request: Request, service: ContactService, error=None, form=None, status=200):
         return templates.TemplateResponse(
             request, "contacts.html",
             {"contacts": service.list_contacts(), "companies": service.list_companies(),
              "error": error, "form": form or {}},
+            status_code=status,
+        )
+
+    def segments_page(request: Request, segments: SegmentService, error=None, form=None, status=200):
+        return templates.TemplateResponse(
+            request, "segments.html",
+            {"segments": segments.list_with_counts(), "error": error,
+             "form": form or new_segment_form(),
+             "fields": FIELD_LABELS, "operators": OPERATOR_LABELS},
             status_code=status,
         )
 
@@ -153,6 +251,54 @@ def create_app(
         except ValidationError as exc:
             return page(request, service, str(exc), None, 422)
         return RedirectResponse("/contacts", status_code=303)
+
+    @app.get("/segments")
+    def segments_list(request: Request, segments: Seg):
+        return segments_page(request, segments)
+
+    @app.post("/segments")
+    def create_segment(
+        request: Request,
+        segments: Seg,
+        name: str = Form(""),
+        description: str = Form(""),
+        match_mode: str = Form("all"),
+        criterion_field: list[str] = Form([]),
+        criterion_operator: list[str] = Form([]),
+        criterion_value: list[str] = Form([]),
+    ):
+        form = {
+            "name": name,
+            "description": description,
+            "match_mode": match_mode,
+            "rows": form_rows(criterion_field, criterion_operator, criterion_value),
+        }
+        try:
+            criteria = criteria_from_rows(criterion_field, criterion_operator, criterion_value)
+            created = segments.create_segment(name, description, match_mode, criteria)
+        except ValidationError as exc:
+            return segments_page(request, segments, str(exc), form, 422)
+        return RedirectResponse(f"/segments/{created.id}", status_code=303)
+
+    @app.get("/segments/{segment_id}")
+    def segment_detail(request: Request, segments: Seg, segment_id: int):
+        try:
+            segment = segments.get_segment(segment_id)
+        except ValidationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return templates.TemplateResponse(
+            request, "segment.html",
+            {"segment": segment, "members": segments.members(segment_id),
+             "fields": FIELD_LABELS, "operators": OPERATOR_LABELS},
+        )
+
+    @app.post("/segments/{segment_id}/delete")
+    def delete_segment(segments: Seg, segment_id: int):
+        try:
+            segments.delete_segment(segment_id)
+        except ValidationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RedirectResponse("/segments", status_code=303)
 
     return app
 

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ segment.name }} · Mini-Marketo{% endblock %}
+{% block content %}
+<p><a href="/segments">← Segmentos</a></p>
+
+<section>
+  <h2>{{ segment.name }}</h2>
+  {% if segment.description %}<p>{{ segment.description }}</p>{% endif %}
+  <p>Entra quem cumprir <strong>{{ 'todos' if segment.match_mode == 'all' else 'qualquer um' }}</strong> dos critérios:</p>
+  <ul>
+  {% for c in segment.criteria %}
+    <li>{{ fields[c.field] }} {{ operators[c.operator] }}{% if c.value is not none %} <code>{{ c.value }}</code>{% endif %}</li>
+  {% endfor %}
+  </ul>
+  <form method="post" action="/segments/{{ segment.id }}/delete" class="inline">
+    <button>Apagar segmento</button>
+  </form>
+</section>
+
+<section>
+  <h2>Membros ({{ members|length }})</h2>
+  <table>
+    <thead><tr><th>Nome</th><th>Emails</th><th>Empresa</th></tr></thead>
+    <tbody>
+    {% for m in members %}
+      <tr>
+        <td>{{ m.first_name }} {{ m.last_name }}</td>
+        <td>{{ m.emails|join(', ') }}</td>
+        <td>{{ m.company_name or '—' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3">Nenhum contacto cumpre estes critérios.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
