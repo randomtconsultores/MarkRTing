@@ -1,45 +1,60 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from mini_marketo.domain.contact import DuplicateEmailError
+import pytest
+from fastapi.testclient import TestClient
 
-WORKERS = 16
-PER_WORKER = 10
+from mini_marketo.main import create_app
+
+WORKERS = 12
+ROUNDS = 8
 
 
-def test_concurrent_writes_on_shared_connection(service):
-    """Várias threads a escrever sobre o mesmo serviço (e, logo, a mesma ligação).
+@pytest.fixture(params=["sqlite", "postgres"])
+def app(request, tmp_path, monkeypatch):
+    if request.param == "sqlite":
+        return create_app(tmp_path / "concurrency.db")
+    url = request.getfixturevalue("pg_url")
+    schema = request.getfixturevalue("pg_schema")
+    # O libpq lê PGOPTIONS: isola o teste no schema próprio, sem tocar no código da app.
+    monkeypatch.setenv("PGOPTIONS", f"-c search_path={schema}")
+    return create_app(database_url=url)
 
-    Cada thread cria contactos únicos e, entre eles, provoca uma violação real de
-    unicidade (contornando a verificação do serviço, como numa corrida entre dois
-    pedidos). Com uma ligação partilhada, o rollback de uma thread pode desfazer a
-    transação de outra.
+
+def test_concurrent_requests_do_not_interfere(app):
+    """Em cada ronda, várias threads criam o mesmo email ao mesmo tempo (pedidos HTTP).
+
+    Tem de haver exatamente um sucesso por ronda; os outros pedidos recebem 422
+    «Já existe». Nenhum pode falhar com erro 500 nem afetar pedidos de outras threads.
     """
-    service.create_contact("Base", "Contacto", "base@a.pt")
-    barrier = threading.Barrier(WORKERS)
+    barriers = [threading.Barrier(WORKERS) for _ in range(ROUNDS)]
+    successes = [[] for _ in range(ROUNDS)]
     problems = []
 
     def worker(n):
-        barrier.wait(timeout=30)
-        for i in range(PER_WORKER):
-            key = n * 1000 + i
+        client = TestClient(app)
+        for rnd in range(ROUNDS):
+            barriers[rnd].wait(timeout=30)
             try:
-                service.create_contact("Ana", f"N{key}", f"u{key}@a.pt")
+                r = client.post(
+                    "/contacts",
+                    data={"first_name": f"W{n}", "last_name": "R", "email": f"race{rnd}@a.pt"},
+                )
             except Exception as exc:
-                problems.append(f"criar {key}: {exc!r}")
-            try:
-                service.repo.add_contact("base@a.pt", "Dup", f"D{key}")
-            except DuplicateEmailError:
-                pass
-            except Exception as exc:
-                problems.append(f"duplicado {key}: {exc!r}")
+                problems.append(f"ronda {rnd}, worker {n}: {exc!r}")
+                continue
+            if r.status_code == 200:
+                successes[rnd].append(n)
+            elif not (r.status_code == 422 and "Já existe" in r.text):
+                problems.append(f"ronda {rnd}, worker {n}: HTTP {r.status_code}")
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         futures = [pool.submit(worker, n) for n in range(WORKERS)]
         for future in futures:
-            future.result(timeout=60)
+            future.result(timeout=120)
 
-    contacts = service.list_contacts()
     assert not problems, problems[:5]
-    assert len(contacts) == 1 + WORKERS * PER_WORKER
-    assert all(len(c.emails) == 1 for c in contacts)
+    assert [len(s) for s in successes] == [1] * ROUNDS
+    page = TestClient(app).get("/contacts").text
+    assert f"Contactos ({ROUNDS})" in page
+    assert page.count("<li>") == ROUNDS
