@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Contactos · Mini-Marketo{% endblock %}
+{% block content %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+<section>
+  <h2>Novo contacto</h2>
+  <form method="post" action="/contacts">
+    <label>Nome <input name="first_name" value="{{ form.first_name or '' }}" required></label>
+    <label>Apelido <input name="last_name" value="{{ form.last_name or '' }}" required></label>
+    <label>Email <input type="email" name="email" value="{{ form.email or '' }}" required></label>
+    <label>Empresa
+      <select name="company_id">
+        <option value="">— nenhuma —</option>
+        {% for c in companies %}
+        <option value="{{ c.id }}" {{ 'selected' if form.company_id|string == c.id|string }}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button>Guardar</button>
+  </form>
+</section>
+
+<section>
+  <h2>Nova empresa</h2>
+  <form method="post" action="/companies">
+    <label>Nome <input name="name" required></label>
+    <label>Website <input name="website"></label>
+    <button>Guardar</button>
+  </form>
+</section>
+
+<section>
+  <h2>Contactos ({{ contacts|length }})</h2>
+  <table>
+    <thead><tr><th>Nome</th><th>Email</th><th>Empresa</th><th>Criado em</th></tr></thead>
+    <tbody>
+    {% for c in contacts %}
+      <tr><td>{{ c.first_name }} {{ c.last_name }}</td><td>{{ c.email }}</td>
+          <td>{{ c.company_name or '—' }}</td><td>{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}</td></tr>
+    {% else %}
+      <tr><td colspan="4">Ainda não há contactos.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
