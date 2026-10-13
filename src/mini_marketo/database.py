@@ -1,12 +1,25 @@
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+from .migrations import Migration, MigrationError, latest_version, pending
 
+BASELINE_VERSION = 2
 
-class MigrationError(RuntimeError):
-    pass
+SEGMENTS_V3 = """
+CREATE TABLE segments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    description TEXT NOT NULL DEFAULT '',
+    match_mode  TEXT NOT NULL CHECK (match_mode IN ('all', 'any')),
+    criteria    TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now'))
+);
+CREATE UNIQUE INDEX ux_segments_name ON segments (lower(name));
+"""
 
+# Esquema criado de raiz na versão-base; as versões seguintes entram em MIGRATIONS (SQL do SQLite).
+MIGRATIONS: list[Migration] = [(3, SEGMENTS_V3)]
+SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 
 COMPANIES_DDL = """
 CREATE TABLE IF NOT EXISTS companies (
@@ -37,8 +50,8 @@ CREATE INDEX ix_contact_emails_contact ON contact_emails (contact_id);
 CREATE UNIQUE INDEX ux_contact_one_primary ON contact_emails (contact_id) WHERE is_primary = 1;
 """
 
-MIGRATION_V1_TO_V2 = (
-    "BEGIN;\n"
+# Bases criadas antes de existir user_version (esquema v1, com o email em `contacts`).
+LEGACY_V1_TO_V2 = (
     "DROP INDEX IF EXISTS ix_contacts_company;\n"
     "ALTER TABLE contacts RENAME TO contacts_v1;\n"
     + CONTACTS_DDL
@@ -48,8 +61,6 @@ INSERT INTO contacts (id, first_name, last_name, company_id, created_at)
 INSERT INTO contact_emails (contact_id, email, is_primary)
     SELECT id, email, 1 FROM contacts_v1 ORDER BY id;
 DROP TABLE contacts_v1;
-PRAGMA user_version = 2;
-COMMIT;
 """
 )
 
@@ -76,11 +87,30 @@ def _orphan_contact_ids(conn: sqlite3.Connection) -> list[int]:
     return [r["id"] for r in rows]
 
 
+def _script(steps: list[Migration]) -> str:
+    """Todos os passos numa única transação: ou ficam todos aplicados, ou nenhum.
+
+    Cada script pode terminar com ou sem ';': normaliza-se para um só, para que o
+    PRAGMA seguinte nunca fique colado à última instrução do passo.
+    """
+    body = "".join(
+        f"{sql.strip().rstrip(';')};\nPRAGMA user_version = {target};\n" for target, sql in steps
+    )
+    return f"BEGIN;\n{body}COMMIT;"
+
+
 def init_db(conn: sqlite3.Connection) -> None:
+    latest = latest_version(BASELINE_VERSION, MIGRATIONS)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version >= SCHEMA_VERSION:
-        return
-    try:
+    if version > latest:
+        raise MigrationError(
+            f"A base de dados (versão {version}) é mais recente do que a aplicação (versão {latest})."
+        )
+    if 0 < version < BASELINE_VERSION:
+        raise MigrationError(f"Versão do esquema desconhecida: {version}.")
+
+    steps: list[Migration] = []
+    if version == 0:
         if _contacts_has_email_column(conn):
             orphans = _orphan_contact_ids(conn)
             if orphans:
@@ -90,11 +120,15 @@ def init_db(conn: sqlite3.Connection) -> None:
                     f"(ids: {ids}). Corrija ou remova estes registos e volte a arrancar; "
                     "a base de dados não foi alterada."
                 )
-            conn.executescript(MIGRATION_V1_TO_V2)
+            steps.append((BASELINE_VERSION, LEGACY_V1_TO_V2))
         else:
-            conn.executescript(
-                COMPANIES_DDL + CONTACTS_DDL + f"PRAGMA user_version = {SCHEMA_VERSION};"
-            )
+            steps.append((BASELINE_VERSION, COMPANIES_DDL + CONTACTS_DDL))
+        version = BASELINE_VERSION
+    steps += pending(version, MIGRATIONS)
+    if not steps:
+        return
+    try:
+        conn.executescript(_script(steps))
     except Exception:
         if conn.in_transaction:
             conn.rollback()

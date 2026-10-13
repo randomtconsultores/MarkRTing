@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Segmentos · Mini-Marketo{% endblock %}
+{% block content %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+<section>
+  <h2>Novo segmento</h2>
+  {% include "_segment_form.html" %}
+</section>
+
+<section>
+  <h2>Segmentos ({{ segments|length }})</h2>
+  <table>
+    <thead><tr><th>Nome</th><th>Critérios</th><th>Membros</th><th>Criado em (UTC)</th></tr></thead>
+    <tbody>
+    {% for s, count in segments %}
+      <tr>
+        <td><a href="/segments/{{ s.id }}">{{ s.name }}</a></td>
+        <td>{{ s.criteria|length }} ({{ 'todos' if s.match_mode == 'all' else 'qualquer' }})</td>
+        <td>{{ count }}</td>
+        <td>{{ s.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4">Ainda não há segmentos.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

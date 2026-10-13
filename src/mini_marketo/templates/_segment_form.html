@@ -1,0 +1,31 @@
+<form method="post" action="{{ form_action }}">
+  <label>Nome <input name="name" value="{{ form.name }}" maxlength="100" required></label>
+  <label>Descrição <input name="description" value="{{ form.description }}" maxlength="500"></label>
+  <label>Um contacto entra se cumprir
+    <select name="match_mode">
+      <option value="all" {{ 'selected' if form.match_mode == 'all' }}>todos os critérios</option>
+      <option value="any" {{ 'selected' if form.match_mode == 'any' }}>qualquer critério</option>
+    </select>
+  </label>
+  <fieldset>
+    <legend>Critérios (as linhas sem campo são ignoradas)</legend>
+    {% for row in form.rows %}
+    <div class="criterion">
+      <select name="criterion_field" aria-label="Campo {{ loop.index }}">
+        <option value="">— não usar —</option>
+        {% for key, label in fields.items() %}
+        <option value="{{ key }}" {{ 'selected' if row.field == key }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <select name="criterion_operator" aria-label="Operador {{ loop.index }}">
+        {% for key, label in operators.items() %}
+        <option value="{{ key }}" {{ 'selected' if row.operator == key }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <input name="criterion_value" value="{{ row.value }}" maxlength="200" aria-label="Valor {{ loop.index }}">
+    </div>
+    {% endfor %}
+    <p class="hint">«está vazio» e «não está vazio» aplicam-se à empresa e não levam valor. «antes de» e «depois de» aplicam-se à data de criação, no formato AAAA-MM-DD. A comparação de texto não distingue maiúsculas.</p>
+  </fieldset>
+  <button>{{ submit_label }}</button>
+</form>
