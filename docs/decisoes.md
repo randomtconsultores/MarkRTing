@@ -31,3 +31,11 @@ Requisito novo: um contacto pode ter vários emails, um deles principal.
 - Coluna JSON/texto com vários emails em `contacts`: rejeitada, perde a unicidade garantida pela BD.
 - Principal como coluna `primary_email_id` em `contacts`: rejeitada, cria referência circular entre tabelas.
 - Email não único entre contactos: rejeitada, reintroduz duplicados de pessoas.
+
+**Lição: migrar dados reais, não só dados de teste**
+
+Na primeira execução sobre a base do Codespace, a migração falhou: existia um contacto com `company_id = 9999`, uma empresa inexistente. O SQLite da linha de comandos tem `foreign_keys` desligado por omissão, pelo que a chave estrangeira só protege as ligações que a ativam. A transação fez rollback e a base ficou intacta na v1, mas a mensagem era um `IntegrityError` genérico.
+
+Decisão: antes de migrar, procurar contactos órfãos e abortar com `MigrationError`, listando os ids afetados e sem alterar a base de dados. Alternativa rejeitada: pôr `company_id` a NULL automaticamente, porque apagaria informação sem o utilizador saber.
+
+A migração copia agora os contactos com `ORDER BY id`, para que os ids de `contact_emails` sigam a ordem dos contactos e não a ordem de leitura de um índice.

@@ -3,6 +3,11 @@ from pathlib import Path
 
 SCHEMA_VERSION = 2
 
+
+class MigrationError(RuntimeError):
+    pass
+
+
 COMPANIES_DDL = """
 CREATE TABLE IF NOT EXISTS companies (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,9 +44,9 @@ MIGRATION_V1_TO_V2 = (
     + CONTACTS_DDL
     + """
 INSERT INTO contacts (id, first_name, last_name, company_id, created_at)
-    SELECT id, first_name, last_name, company_id, created_at FROM contacts_v1;
+    SELECT id, first_name, last_name, company_id, created_at FROM contacts_v1 ORDER BY id;
 INSERT INTO contact_emails (contact_id, email, is_primary)
-    SELECT id, email, 1 FROM contacts_v1;
+    SELECT id, email, 1 FROM contacts_v1 ORDER BY id;
 DROP TABLE contacts_v1;
 PRAGMA user_version = 2;
 COMMIT;
@@ -62,12 +67,28 @@ def _contacts_has_email_column(conn: sqlite3.Connection) -> bool:
     return any(r["name"] == "email" for r in conn.execute("PRAGMA table_info(contacts)"))
 
 
+def _orphan_contact_ids(conn: sqlite3.Connection) -> list[int]:
+    rows = conn.execute(
+        "SELECT c.id FROM contacts c LEFT JOIN companies co ON co.id = c.company_id "
+        "WHERE c.company_id IS NOT NULL AND co.id IS NULL ORDER BY c.id"
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version >= SCHEMA_VERSION:
         return
     try:
         if _contacts_has_email_column(conn):
+            orphans = _orphan_contact_ids(conn)
+            if orphans:
+                ids = ", ".join(str(i) for i in orphans)
+                raise MigrationError(
+                    "Migração v1->v2 abortada: contactos com empresa inexistente "
+                    f"(ids: {ids}). Corrija ou remova estes registos e volte a arrancar; "
+                    "a base de dados não foi alterada."
+                )
             conn.executescript(MIGRATION_V1_TO_V2)
         else:
             conn.executescript(
