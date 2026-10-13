@@ -53,6 +53,25 @@ def create_app(db_path: str | Path = DEFAULT_DB) -> FastAPI:
             return page(request, msg, form, 422)
         return RedirectResponse("/contacts", status_code=303)
 
+    def email_action(request: Request, action):
+        try:
+            action()
+        except ValidationError as exc:
+            return page(request, str(exc), None, 422)
+        return RedirectResponse("/contacts", status_code=303)
+
+    @app.post("/contacts/{contact_id}/emails")
+    def add_email(request: Request, contact_id: int, email: str = Form("")):
+        return email_action(request, lambda: service.add_email(contact_id, email))
+
+    @app.post("/contacts/{contact_id}/emails/primary")
+    def set_primary_email(request: Request, contact_id: int, email: str = Form("")):
+        return email_action(request, lambda: service.set_primary_email(contact_id, email))
+
+    @app.post("/contacts/{contact_id}/emails/remove")
+    def remove_email(request: Request, contact_id: int, email: str = Form("")):
+        return email_action(request, lambda: service.remove_email(contact_id, email))
+
     @app.post("/companies")
     def create_company(request: Request, name: str = Form(""), website: str = Form("")):
         try:

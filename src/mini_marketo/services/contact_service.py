@@ -1,5 +1,6 @@
 from ..domain.contact import (
-    Company, Contact, DuplicateEmailError, ValidationError, clean_name, validate_email,
+    Company, Contact, DuplicateEmailError, ValidationError, clean_name,
+    normalize_email, validate_email,
 )
 from ..repositories.contact_repository import ContactRepository
 
@@ -25,8 +26,42 @@ class ContactService:
             raise DuplicateEmailError("Já existe um contacto com esse email.")
         return self.repo.add_contact(email, first_name, last_name, company_id)
 
+    def add_email(self, contact_id: int, email: str) -> Contact:
+        email = validate_email(email)
+        self._require_contact(contact_id)
+        if self.repo.email_exists(email):
+            raise DuplicateEmailError("Já existe um contacto com esse email.")
+        self.repo.add_email(contact_id, email)
+        return self.repo.get_contact(contact_id)
+
+    def set_primary_email(self, contact_id: int, email: str) -> Contact:
+        email = normalize_email(email)
+        contact = self._require_contact(contact_id)
+        if email not in contact.emails:
+            raise ValidationError("O email não pertence a este contacto.")
+        self.repo.set_primary_email(contact_id, email)
+        return self.repo.get_contact(contact_id)
+
+    def remove_email(self, contact_id: int, email: str) -> Contact:
+        email = normalize_email(email)
+        contact = self._require_contact(contact_id)
+        if email not in contact.emails:
+            raise ValidationError("O email não pertence a este contacto.")
+        if email == contact.email:
+            raise ValidationError(
+                "Não é possível remover o email principal; defina outro como principal primeiro."
+            )
+        self.repo.remove_email(contact_id, email)
+        return self.repo.get_contact(contact_id)
+
     def list_contacts(self) -> list[Contact]:
         return self.repo.list_contacts()
 
     def list_companies(self) -> list[Company]:
         return self.repo.list_companies()
+
+    def _require_contact(self, contact_id: int) -> Contact:
+        contact = self.repo.get_contact(contact_id)
+        if contact is None:
+            raise ValidationError("O contacto não existe.")
+        return contact

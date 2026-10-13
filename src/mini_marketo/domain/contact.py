@@ -43,9 +43,14 @@ class Company:
 @dataclass(frozen=True)
 class Contact:
     id: int | None
-    email: str
     first_name: str
     last_name: str
+    emails: tuple[str, ...]
     company_id: int | None = None
     company_name: str | None = None
     created_at: datetime | None = None
+
+    @property
+    def email(self) -> str:
+        """Email principal (o primeiro de `emails`)."""
+        return self.emails[0] if self.emails else ""
