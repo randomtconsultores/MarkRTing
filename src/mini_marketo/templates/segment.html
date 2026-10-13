@@ -19,11 +19,24 @@
 </section>
 
 <section>
-  <h2>Membros ({{ members|length }})</h2>
+  <h2>Membros ({{ members.total }})</h2>
+  {% if members.total %}
+  <form method="get" action="/segments/{{ segment.id }}" class="inline">
+    <label>Por página
+      <select name="per_page">
+        {% for size in sizes %}
+        <option value="{{ size }}" {{ 'selected' if size == members.per_page }}>{{ size }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button>Aplicar</button>
+  </form>
+  <p>Mostrando {{ members.first }}–{{ members.last }} de {{ members.total }}</p>
+  {% endif %}
   <table>
     <thead><tr><th>Nome</th><th>Emails</th><th>Empresa</th></tr></thead>
     <tbody>
-    {% for m in members %}
+    {% for m in members.items %}
       <tr>
         <td>{{ m.first_name }} {{ m.last_name }}</td>
         <td>{{ m.emails|join(', ') }}</td>
@@ -34,5 +47,12 @@
     {% endfor %}
     </tbody>
   </table>
+  {% if members.pages > 1 %}
+  <nav class="pager">
+    {% if members.has_previous %}<a rel="prev" href="/segments/{{ segment.id }}?per_page={{ members.per_page }}&amp;page={{ members.page - 1 }}">← anterior</a>{% endif %}
+    <span>Página {{ members.page }} de {{ members.pages }}</span>
+    {% if members.has_next %}<a rel="next" href="/segments/{{ segment.id }}?per_page={{ members.per_page }}&amp;page={{ members.page + 1 }}">seguinte →</a>{% endif %}
+  </nav>
+  {% endif %}
 </section>
 {% endblock %}

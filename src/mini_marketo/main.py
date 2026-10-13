@@ -5,7 +5,7 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -14,6 +14,7 @@ from .database import connect as sqlite_connect
 from .database import init_db as sqlite_init_db
 from .domain.contact import ValidationError
 from .domain.segment import Criterion, Segment
+from .pagination import PAGE_SIZES, paginate, parse_page, parse_per_page
 from .repositories.contact_repository import ContactRepository
 from .repositories.segment_repository import SegmentRepository
 from .services.contact_service import ContactService
@@ -317,11 +318,21 @@ def create_app(
         return RedirectResponse(f"/segments/{created.id}", status_code=303)
 
     @app.get("/segments/{segment_id}")
-    def segment_detail(request: Request, segments: Seg, segment_id: int):
+    def segment_detail(
+        request: Request,
+        segments: Seg,
+        segment_id: int,
+        page_number: str = Query("1", alias="page"),
+        per_page: str = Query(""),
+    ):
+        # Lidos como texto: um valor inválido volta ao valor por omissão em vez de dar erro 422.
         segment = load_segment(segments, segment_id)
+        members = paginate(
+            segments.members(segment_id), parse_page(page_number), parse_per_page(per_page)
+        )
         return templates.TemplateResponse(
             request, "segment.html",
-            {"segment": segment, "members": segments.members(segment_id),
+            {"segment": segment, "members": members, "sizes": PAGE_SIZES,
              "fields": FIELD_LABELS, "operators": OPERATOR_LABELS},
         )
 
