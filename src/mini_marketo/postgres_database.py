@@ -3,9 +3,22 @@ from psycopg.rows import dict_row
 
 from .migrations import Migration, MigrationError, latest_version, pending
 
-# Esquema criado de raiz. As versões seguintes entram em MIGRATIONS (SQL do PostgreSQL).
 BASELINE_VERSION = 2
-MIGRATIONS: list[Migration] = []
+
+SEGMENTS_V3 = """
+CREATE TABLE segments (
+    id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name        TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    description TEXT NOT NULL DEFAULT '',
+    match_mode  TEXT NOT NULL CHECK (match_mode IN ('all', 'any')),
+    criteria    TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX ux_segments_name ON segments (lower(name));
+"""
+
+# Esquema criado de raiz na versão-base; as versões seguintes entram em MIGRATIONS (SQL do PostgreSQL).
+MIGRATIONS: list[Migration] = [(3, SEGMENTS_V3)]
 SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 
 _LOCK_ID = 7305001

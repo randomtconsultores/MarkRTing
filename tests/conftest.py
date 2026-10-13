@@ -8,7 +8,9 @@ from mini_marketo import database as sqlite_database
 from mini_marketo.database import connect as sqlite_connect
 from mini_marketo.database import init_db as sqlite_init_db
 from mini_marketo.repositories.contact_repository import ContactRepository
+from mini_marketo.repositories.segment_repository import SegmentRepository
 from mini_marketo.services.contact_service import ContactService
+from mini_marketo.services.segment_service import SegmentService
 
 
 @pytest.fixture
@@ -102,6 +104,20 @@ class Db:
         )
 
         return ContactService(PostgresContactRepository(self.conn))
+
+    def segment_service(self):
+        if self.kind == "sqlite":
+            return SegmentService(SegmentRepository(self.conn), ContactRepository(self.conn))
+        from mini_marketo.repositories.postgres_contact_repository import (
+            PostgresContactRepository,
+        )
+        from mini_marketo.repositories.postgres_segment_repository import (
+            PostgresSegmentRepository,
+        )
+
+        return SegmentService(
+            PostgresSegmentRepository(self.conn), PostgresContactRepository(self.conn)
+        )
 
     def reopen(self):
         return self._reopen()
