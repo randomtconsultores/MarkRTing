@@ -39,3 +39,37 @@ Na primeira execução sobre a base do Codespace, a migração falhou: existia u
 Decisão: antes de migrar, procurar contactos órfãos e abortar com `MigrationError`, listando os ids afetados e sem alterar a base de dados. Alternativa rejeitada: pôr `company_id` a NULL automaticamente, porque apagaria informação sem o utilizador saber.
 
 A migração copia agora os contactos com `ORDER BY id`, para que os ids de `contact_emails` sigam a ordem dos contactos e não a ordem de leitura de um índice.
+
+## Experiência 2 - PostgreSQL
+
+Pergunta: quanto código muda ao acrescentar PostgreSQL como segunda base de dados?
+
+**O que não muda**
+
+- `domain/` e `services/`: nenhuma linha. O serviço só conhece os métodos do repositório e as exceções do domínio.
+
+**O que é novo ou muda**
+
+- `postgres_database.py` (ligação e esquema) e `PostgresContactRepository`: SQL e tratamento de erros próprios do PostgreSQL.
+- `main.py`: `build_service` escolhe o backend (`MINI_MARKETO_DATABASE_URL`), e `create_app` aceita um serviço já construído.
+- Testes: a fixture `service` (em `conftest.py`) corre os testes do serviço e da web contra os dois backends. Os testes que dependem de SQL específico ficam em `test_sqlite_schema.py` e `test_postgres_schema.py`.
+
+**Decisões**
+
+- Dois repositórios sem interface abstrata (Protocol/ABC): o contrato é o conjunto de testes executado contra ambos. Reavaliar se surgir uma terceira implementação ou um erro de contrato que os testes não apanhem.
+- `psycopg` 3 em `autocommit`, com cada escrita em `conn.transaction()`. Em vez de `with conn:`, que no psycopg 3 fecha a ligação à saída do bloco.
+- Erros distinguidos por `UniqueViolation` e pelo nome da restrição (`contact_emails_email_key`), em vez de procurar texto na mensagem como no SQLite.
+- Esquema: `IDENTITY`, `TIMESTAMPTZ`, `BOOLEAN`. A versão fica na tabela `schema_version`, e um bloqueio consultivo (`pg_advisory_xact_lock`) evita criar o esquema em simultâneo a partir de dois processos.
+- Contrato de datas: os dois repositórios devolvem `created_at` como `datetime` ingénuo em UTC, porque a interface mostra UTC.
+- Ordenação de empresas por `lower(name)`. No SQLite, `COLLATE NOCASE` só trata ASCII; no PostgreSQL, `lower()` depende da locale. É uma diferença conhecida.
+- Isolamento dos testes: um schema por teste (`search_path`), criado e apagado no fim.
+
+**Limitações conhecidas**
+
+- Uma única ligação partilhada entre threads: no PostgreSQL, transações de pedidos concorrentes podem misturar-se na mesma ligação. Próximo passo: ligação por pedido ou pool.
+- Não existe script de cópia de SQLite para PostgreSQL.
+- A migração de esquema em PostgreSQL só deteta uma versão diferente e aborta.
+
+**Por validar**
+
+- Estes pontos foram escritos sem servidor PostgreSQL disponível; os testes parametrizados são a validação.

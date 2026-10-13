@@ -6,7 +6,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .database import connect, init_db
+from .database import connect as sqlite_connect
+from .database import init_db as sqlite_init_db
 from .domain.contact import ValidationError
 from .repositories.contact_repository import ContactRepository
 from .services.contact_service import ContactService
@@ -15,10 +16,27 @@ BASE = Path(__file__).parent
 DEFAULT_DB = Path(os.environ.get("MINI_MARKETO_DB", BASE.parent.parent / "data" / "mini_marketo.db"))
 
 
-def create_app(db_path: str | Path = DEFAULT_DB) -> FastAPI:
-    conn = connect(db_path)
-    init_db(conn)
-    service = ContactService(ContactRepository(conn))
+def build_service(db_path: str | Path, database_url: str | None = None) -> ContactService:
+    if database_url:
+        # Importação tardia: o psycopg só é necessário quando se usa PostgreSQL.
+        from .postgres_database import connect, init_db
+        from .repositories.postgres_contact_repository import PostgresContactRepository
+
+        conn = connect(database_url)
+        init_db(conn)
+        return ContactService(PostgresContactRepository(conn))
+    conn = sqlite_connect(db_path)
+    sqlite_init_db(conn)
+    return ContactService(ContactRepository(conn))
+
+
+def create_app(
+    db_path: str | Path = DEFAULT_DB,
+    database_url: str | None = None,
+    service: ContactService | None = None,
+) -> FastAPI:
+    if service is None:
+        service = build_service(db_path, database_url)
     templates = Jinja2Templates(directory=str(BASE / "templates"))
 
     app = FastAPI(title="Mini-Marketo")
@@ -84,4 +102,4 @@ def create_app(db_path: str | Path = DEFAULT_DB) -> FastAPI:
 
 
 def app_factory() -> FastAPI:
-    return create_app()
+    return create_app(database_url=os.environ.get("MINI_MARKETO_DATABASE_URL"))
