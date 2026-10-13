@@ -33,7 +33,7 @@
 <section>
   <h2>Contactos ({{ contacts|length }})</h2>
   <table>
-    <thead><tr><th>Nome</th><th>Email</th><th>Empresa</th><th>Criado em</th></tr></thead>
+    <thead><tr><th>Nome</th><th>Email</th><th>Empresa</th><th>Criado em (UTC)</th></tr></thead>
     <tbody>
     {% for c in contacts %}
       <tr><td>{{ c.first_name }} {{ c.last_name }}</td><td>{{ c.email }}</td>
