@@ -36,10 +36,11 @@ def test_failing_migration_rolls_back_every_pending_step(db, monkeypatch):
             (latest + 2, "CREATE TABLE m_bad (id INTEGER); CREATE TABLE m_bad (id INTEGER)"),
         ],
     )
-    with pytest.raises(Exception):
+    # O erro tem de ser a tabela duplicada, não outra falha qualquer (ex.: sintaxe).
+    with pytest.raises(Exception, match="m_bad"):
         db.module.init_db(db.conn)
     assert db.version() == latest
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="m_ok"):
         db.execute("SELECT * FROM m_ok")
 
 

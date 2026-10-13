@@ -75,8 +75,14 @@ def _orphan_contact_ids(conn: sqlite3.Connection) -> list[int]:
 
 
 def _script(steps: list[Migration]) -> str:
-    """Todos os passos numa única transação: ou ficam todos aplicados, ou nenhum."""
-    body = "".join(f"{sql}\nPRAGMA user_version = {target};\n" for target, sql in steps)
+    """Todos os passos numa única transação: ou ficam todos aplicados, ou nenhum.
+
+    Cada script pode terminar com ou sem ';': normaliza-se para um só, para que o
+    PRAGMA seguinte nunca fique colado à última instrução do passo.
+    """
+    body = "".join(
+        f"{sql.strip().rstrip(';')};\nPRAGMA user_version = {target};\n" for target, sql in steps
+    )
     return f"BEGIN;\n{body}COMMIT;"
 
 
