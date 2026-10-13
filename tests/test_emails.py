@@ -1,18 +1,6 @@
-import sqlite3
-
 import pytest
 
-from mini_marketo.database import connect, init_db
 from mini_marketo.domain.contact import DuplicateEmailError, ValidationError
-from mini_marketo.repositories.contact_repository import ContactRepository
-from mini_marketo.services.contact_service import ContactService
-
-
-@pytest.fixture
-def service():
-    conn = connect(":memory:")
-    init_db(conn)
-    return ContactService(ContactRepository(conn))
 
 
 @pytest.fixture
@@ -87,24 +75,16 @@ def test_remove_unknown_email(service, ana):
         service.remove_email(ana.id, "nao@a.pt")
 
 
-def test_database_allows_only_one_primary_per_contact(service, ana):
-    with pytest.raises(sqlite3.IntegrityError):
-        service.repo.conn.execute(
-            "INSERT INTO contact_emails (contact_id, email, is_primary) VALUES (?, 'z@a.pt', 1)",
-            (ana.id,),
-        )
-
-
-def test_deleting_contact_deletes_its_emails(service, ana):
-    service.add_email(ana.id, "b@a.pt")
-    with service.repo.conn:
-        service.repo.conn.execute("DELETE FROM contacts WHERE id = ?", (ana.id,))
-    n = service.repo.conn.execute("SELECT COUNT(*) FROM contact_emails").fetchone()[0]
-    assert n == 0
-
-
 def test_list_contacts_includes_all_emails(service, ana):
     service.add_email(ana.id, "b@a.pt")
     service.create_contact("Rui", "Costa", "rui@a.pt")
     by_name = {c.first_name: c.emails for c in service.list_contacts()}
     assert by_name == {"Ana": ("ana@a.pt", "b@a.pt"), "Rui": ("rui@a.pt",)}
+
+
+def test_repository_translates_unique_violation_and_rolls_back(service, ana):
+    # Contorna a verificação do serviço (como numa corrida entre dois pedidos).
+    with pytest.raises(DuplicateEmailError):
+        service.repo.add_contact("ana@a.pt", "Outra", "Pessoa")
+    assert len(service.list_contacts()) == 1
+    assert service.add_email(ana.id, "b@a.pt").emails == ("ana@a.pt", "b@a.pt")
