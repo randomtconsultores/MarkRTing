@@ -9,7 +9,7 @@ Requisito: agrupar contactos por regras (por exemplo, «da empresa X» ou «cria
 - `domain/segment.py`: `Criterion` (campo, operador, valor) e `Segment` (nome, descrição, modo, critérios). Ambos validam-se ao serem construídos e avaliam um `Contact` sem tocar na base de dados.
 - Migração v3: a primeira migração real do mecanismo da Experiência 1, com a tabela `segments` nos dois backends.
 - `repositories/segment_json.py`, `SegmentRepository` e `PostgresSegmentRepository`; `services/segment_service.py`.
-- Web: `/segments` (listagem, contagem de membros e criação), `/segments/{id}` (critérios e membros) e `/segments/{id}/delete`.
+- Web: `/segments` (listagem, contagem de membros e criação), `/segments/{id}` (critérios e membros), `/segments/{id}/edit` (edição) e `/segments/{id}/delete`.
 
 **Decisões**
 
@@ -23,9 +23,17 @@ Requisito: agrupar contactos por regras (por exemplo, «da empresa X» ou «cria
 - Formulário com 10 linhas fixas, sem JavaScript: as linhas sem campo são ignoradas e, se houver erro, a página volta a mostrar o que foi preenchido. Alternativa adiada: linhas dinâmicas com JavaScript.
 - Uma ligação por pedido também nas rotas de segmentos (`build_segment_service_factory`), sem repetir a migração do esquema. `create_app` ganhou o parâmetro opcional `segment_service`, pelo que os testes anteriores não mudaram.
 
+## Edição de segmentos
+
+- `update` em cada repositório (nome, descrição, modo e critérios): o `id` e o `created_at` não mudam, e devolve se alguma linha foi alterada. `SegmentService.update_segment` valida primeiro e só depois grava, por isso um pedido inválido não altera nada.
+- Edição por substituição completa (nome, descrição, modo e critérios de uma vez), e não por alterações parciais. É o que um formulário envia, e evita estados intermediários sem critérios. Alternativa rejeitada: editar um critério de cada vez, que exigiria identificadores por critério.
+- Um segmento pode mudar só a capitalização do seu próprio nome: o índice único não conflita com a linha que está a ser atualizada. Trocar para o nome de outro segmento é recusado.
+- O formulário de criação e o de edição partilham um template parcial (`_segment_form.html`); só mudam o destino e o texto do botão.
+- Correção ao formulário: as linhas de critérios eram cortadas às 10. Com a edição, um segmento com mais critérios perderia os restantes ao ser aberto para editar. As linhas existentes nunca são cortadas; completam-se apenas as linhas vazias até 10.
+- Concorrência: sem controlo otimista. Se duas pessoas editarem o mesmo segmento, vale a última gravação. Aceitável nesta fase.
+
 **Limitações conhecidas e pendentes**
 
-- Não há edição de segmentos: apaga-se e cria-se de novo.
 - Sem paginação na lista de membros.
 - A comparação de texto não distingue maiúsculas, mas distingue acentos.
 - Operadores mostrados todos juntos no formulário; a combinação inválida é recusada com mensagem, em vez de filtrada na interface.

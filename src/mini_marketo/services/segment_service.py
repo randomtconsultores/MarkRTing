@@ -20,6 +20,20 @@ class SegmentService:
         segment = Segment(None, name, description, match_mode, tuple(criteria))
         return self.segments.add(segment)
 
+    def update_segment(
+        self,
+        segment_id: int,
+        name: str,
+        description: str,
+        match_mode: str,
+        criteria: Iterable[Criterion],
+    ) -> Segment:
+        # Valida tudo antes de gravar: um pedido inválido não altera nada.
+        segment = Segment(segment_id, name, description, match_mode, tuple(criteria))
+        if not self.segments.update(segment):
+            raise ValidationError("O segmento não existe.")
+        return self.get_segment(segment_id)
+
     def get_segment(self, segment_id: int) -> Segment:
         segment = self.segments.get(segment_id)
         if segment is None:

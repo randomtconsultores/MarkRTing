@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Editar {{ segment.name }} · Mini-Marketo{% endblock %}
+{% block content %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<p><a href="/segments/{{ segment.id }}">← {{ segment.name }}</a></p>
+
+<section>
+  <h2>Editar segmento</h2>
+  {% include "_segment_form.html" %}
+</section>
+{% endblock %}

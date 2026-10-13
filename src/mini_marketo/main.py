@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from .database import connect as sqlite_connect
 from .database import init_db as sqlite_init_db
 from .domain.contact import ValidationError
-from .domain.segment import Criterion
+from .domain.segment import Criterion, Segment
 from .repositories.contact_repository import ContactRepository
 from .repositories.segment_repository import SegmentRepository
 from .services.contact_service import ContactService
@@ -52,17 +52,36 @@ def criteria_from_rows(fields: list[str], operators: list[str], values: list[str
     return [Criterion(f, o, v) for f, o, v in zip(fields, operators, values) if f.strip()]
 
 
+def pad_rows(rows: list[dict]) -> list[dict]:
+    """Completa com linhas vazias até FORM_ROWS; nunca corta linhas existentes."""
+    blanks = [{"field": "", "operator": "is", "value": ""} for _ in range(FORM_ROWS - len(rows))]
+    return rows + blanks
+
+
 def form_rows(fields=(), operators=(), values=()) -> list[dict]:
-    rows = [
-        {"field": f, "operator": o or "is", "value": v}
-        for f, o, v in zip_longest(fields, operators, values, fillvalue="")
-    ][:FORM_ROWS]
-    rows += [{"field": "", "operator": "is", "value": ""} for _ in range(FORM_ROWS - len(rows))]
-    return rows
+    return pad_rows(
+        [
+            {"field": f, "operator": o or "is", "value": v}
+            for f, o, v in zip_longest(fields, operators, values, fillvalue="")
+        ]
+    )
 
 
 def new_segment_form() -> dict:
     return {"name": "", "description": "", "match_mode": "all", "rows": form_rows()}
+
+
+def segment_form(segment: Segment) -> dict:
+    rows = [
+        {"field": c.field, "operator": c.operator, "value": c.value or ""}
+        for c in segment.criteria
+    ]
+    return {
+        "name": segment.name,
+        "description": segment.description,
+        "match_mode": segment.match_mode,
+        "rows": pad_rows(rows),
+    }
 
 
 def build_service_factory(db_path: str | Path, database_url: str | None = None) -> ServiceFactory:
@@ -196,9 +215,26 @@ def create_app(
             request, "segments.html",
             {"segments": segments.list_with_counts(), "error": error,
              "form": form or new_segment_form(),
-             "fields": FIELD_LABELS, "operators": OPERATOR_LABELS},
+             "fields": FIELD_LABELS, "operators": OPERATOR_LABELS,
+             "form_action": "/segments", "submit_label": "Guardar"},
             status_code=status,
         )
+
+    def edit_page(request: Request, segment: Segment, form: dict, error=None, status=200):
+        return templates.TemplateResponse(
+            request, "segment_edit.html",
+            {"segment": segment, "error": error, "form": form,
+             "fields": FIELD_LABELS, "operators": OPERATOR_LABELS,
+             "form_action": f"/segments/{segment.id}/edit",
+             "submit_label": "Guardar alterações"},
+            status_code=status,
+        )
+
+    def load_segment(segments: SegmentService, segment_id: int) -> Segment:
+        try:
+            return segments.get_segment(segment_id)
+        except ValidationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/")
     def home():
@@ -282,15 +318,43 @@ def create_app(
 
     @app.get("/segments/{segment_id}")
     def segment_detail(request: Request, segments: Seg, segment_id: int):
-        try:
-            segment = segments.get_segment(segment_id)
-        except ValidationError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        segment = load_segment(segments, segment_id)
         return templates.TemplateResponse(
             request, "segment.html",
             {"segment": segment, "members": segments.members(segment_id),
              "fields": FIELD_LABELS, "operators": OPERATOR_LABELS},
         )
+
+    @app.get("/segments/{segment_id}/edit")
+    def segment_edit_form(request: Request, segments: Seg, segment_id: int):
+        segment = load_segment(segments, segment_id)
+        return edit_page(request, segment, segment_form(segment))
+
+    @app.post("/segments/{segment_id}/edit")
+    def segment_edit(
+        request: Request,
+        segments: Seg,
+        segment_id: int,
+        name: str = Form(""),
+        description: str = Form(""),
+        match_mode: str = Form("all"),
+        criterion_field: list[str] = Form([]),
+        criterion_operator: list[str] = Form([]),
+        criterion_value: list[str] = Form([]),
+    ):
+        segment = load_segment(segments, segment_id)
+        form = {
+            "name": name,
+            "description": description,
+            "match_mode": match_mode,
+            "rows": form_rows(criterion_field, criterion_operator, criterion_value),
+        }
+        try:
+            criteria = criteria_from_rows(criterion_field, criterion_operator, criterion_value)
+            segments.update_segment(segment_id, name, description, match_mode, criteria)
+        except ValidationError as exc:
+            return edit_page(request, segment, form, str(exc), 422)
+        return RedirectResponse(f"/segments/{segment_id}", status_code=303)
 
     @app.post("/segments/{segment_id}/delete")
     def delete_segment(segments: Seg, segment_id: int):

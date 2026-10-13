@@ -33,6 +33,25 @@ class PostgresSegmentRepository:
             raise ValidationError("Já existe um segmento com esse nome.") from exc
         return self.get(row["id"])
 
+    def update(self, segment: Segment) -> bool:
+        """Atualiza nome, descrição, modo e critérios; id e created_at ficam como estavam."""
+        try:
+            with self.conn.transaction():
+                cur = self.conn.execute(
+                    "UPDATE segments SET name = %s, description = %s, match_mode = %s, "
+                    "criteria = %s WHERE id = %s",
+                    (
+                        segment.name,
+                        segment.description,
+                        segment.match_mode,
+                        criteria_to_json(segment.criteria),
+                        segment.id,
+                    ),
+                )
+        except errors.IntegrityError as exc:
+            raise ValidationError("Já existe um segmento com esse nome.") from exc
+        return cur.rowcount == 1
+
     def get(self, segment_id: int) -> Segment | None:
         row = self.conn.execute(
             f"SELECT {_COLUMNS} FROM segments WHERE id = %s", (segment_id,)

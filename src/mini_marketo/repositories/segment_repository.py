@@ -29,6 +29,25 @@ class SegmentRepository:
             raise ValidationError("Já existe um segmento com esse nome.") from exc
         return self.get(cur.lastrowid)
 
+    def update(self, segment: Segment) -> bool:
+        """Atualiza nome, descrição, modo e critérios; id e created_at ficam como estavam."""
+        try:
+            with self.conn:
+                cur = self.conn.execute(
+                    "UPDATE segments SET name = ?, description = ?, match_mode = ?, criteria = ? "
+                    "WHERE id = ?",
+                    (
+                        segment.name,
+                        segment.description,
+                        segment.match_mode,
+                        criteria_to_json(segment.criteria),
+                        segment.id,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ValidationError("Já existe um segmento com esse nome.") from exc
+        return cur.rowcount == 1
+
     def get(self, segment_id: int) -> Segment | None:
         row = self.conn.execute(
             f"SELECT {_COLUMNS} FROM segments WHERE id = ?", (segment_id,)
