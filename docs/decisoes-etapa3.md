@@ -66,4 +66,6 @@ A base de dados é a mesma da aplicação (`MINI_MARKETO_DB` ou `MINI_MARKETO_DA
 
 **Validação**
 
-Pendente: os testes estão escritos (domínio, persistência nos dois backends, emissor com um servidor SMTP falso, entrega e web) mas ainda não foram executados. Nenhum teste envia email a sério. Não foi enviado nenhum email real a partir desta aplicação.
+- Suíte completa no ramo `feat/etapa3-envio`, com SQLite e PostgreSQL ativos: 579 aprovados em 53,79 s. Antes desta etapa a suíte tinha 414 aprovados. A primeira tentativa teve 195 falhas de preparação, porque o utilizador `mm` e a base `mini_marketo_test` ainda não existiam nessa máquina; criados, a repetição passou sem falhas.
+- Nenhum teste envia email a sério e não foi enviado nenhum email real a partir desta aplicação.
+- Não verificado: o envio contra um servidor SMTP real (os testes usam um servidor falso), as páginas `/campaigns` no browser, e o processo de envio de ponta a ponta com uma base de dados real (os testes cobrem a lógica e a recusa de arrancar sem configuração).
