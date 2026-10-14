@@ -135,5 +135,6 @@ O que ficou adiado na secção de consentimento e foi tratado agora, no ramo `fe
 
 - Testes novos: `tests/test_segment_consent_domain.py` (domínio, sem base de dados), `tests/test_segment_consent.py` (9 por backend) e `tests/test_web_segment_consent.py`; `tests/conftest.py` e `tests/test_web_consent.py` ajustados.
 - Primeira execução, com SQLite: dois testes de `test_segment_consent.py` falharam por erro do próprio teste (vários segmentos com o mesmo nome, que a restrição de nomes únicos recusou). Código de produção inalterado; corrigido nos testes (nomes derivados do critério).
-- Execução final, com SQLite: `tests/test_segment_consent.py` com 9 aprovados e 9 ignorados (os de PostgreSQL), e a suíte completa sem falhas.
-- Não verificado: o caminho de PostgreSQL desta alteração (`list_all` e os testes por backend), porque `MINI_MARKETO_TEST_PG` não estava definido; e o aspeto visual do estilo por estado no browser, coberto apenas por testes ao HTML.
+- Execução só com SQLite, depois da correção: `tests/test_segment_consent.py` com 9 aprovados e 9 ignorados (os de PostgreSQL), e a suíte completa sem falhas.
+- Execução com PostgreSQL ativo (`MINI_MARKETO_TEST_PG` definido, servidor local de testes): suíte completa com 414 aprovados, nenhum ignorado, em 24,59 s. Cobre o caminho de PostgreSQL desta alteração (`list_all` e os testes por backend).
+- Não verificado: o aspeto visual do estilo por estado no browser, coberto apenas por testes ao HTML.
