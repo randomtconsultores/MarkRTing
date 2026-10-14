@@ -7,12 +7,15 @@ from ..domain.segment import Criterion, Segment
 class SegmentService:
     """Segmentos dinamicos: os membros são calculados a partir dos contactos atuais.
 
-    `segments` e `contacts` são repositórios do mesmo backend (e da mesma ligação).
+    `segments`, `contacts` e `consents` são repositórios do mesmo backend (e da mesma
+    ligação). `consents` só é necessário para segmentos com critérios de consentimento;
+    sem ele, esses segmentos falham com um erro claro em vez de assumirem «sem registo».
     """
 
-    def __init__(self, segments, contacts):
+    def __init__(self, segments, contacts, consents=None):
         self.segments = segments
         self.contacts = contacts
+        self.consents = consents
 
     def create_segment(
         self, name: str, description: str, match_mode: str, criteria: Iterable[Criterion]
@@ -47,10 +50,27 @@ class SegmentService:
         if not self.segments.delete(segment_id):
             raise ValidationError("O segmento não existe.")
 
+    def _records_by_contact(self, segments: Iterable[Segment]) -> dict:
+        """Registos de consentimento por contacto; só são lidos se algum segmento os usar."""
+        if not any(s.uses_consent for s in segments):
+            return {}
+        if self.consents is None:
+            raise RuntimeError(
+                "SegmentService sem repositório de consentimento: "
+                "não consegue avaliar critérios de consentimento."
+            )
+        grouped: dict[int, list] = {}
+        for record in self.consents.list_all():
+            grouped.setdefault(record.contact_id, []).append(record)
+        return grouped
+
     def members(self, segment_id: int) -> list[Contact]:
         segment = self.get_segment(segment_id)
-        return segment.members(self.contacts.list_contacts())
+        records = self._records_by_contact([segment])
+        return segment.members(self.contacts.list_contacts(), records)
 
     def list_with_counts(self) -> list[tuple[Segment, int]]:
         contacts = self.contacts.list_contacts()
-        return [(s, len(s.members(contacts))) for s in self.segments.list_all()]
+        segments = self.segments.list_all()
+        records = self._records_by_contact(segments)
+        return [(s, len(s.members(contacts, records))) for s in segments]
