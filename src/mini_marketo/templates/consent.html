@@ -6,25 +6,27 @@
 <section>
   <h2>Consentimento: {{ contact.first_name }} {{ contact.last_name }}</h2>
   <p>Email principal: {{ contact.email }}</p>
-  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 </section>
 
 <section>
   <h2>Estado atual</h2>
   <table>
-    <thead><tr><th>Finalidade</th><th>Estado</th><th>Desde (UTC)</th><th>Origem</th></tr></thead>
+    <thead><tr><th>Finalidade</th><th>Estado</th><th>Última decisão (UTC)</th><th>Origem</th></tr></thead>
     <tbody>
     {% for row in rows %}
       <tr>
         <td>{{ row.label }}</td>
-        <td>{{ row.status_label }}</td>
+        <td><span class="badge">{{ row.status_label }}</span></td>
         <td>{{ row.latest.recorded_at.strftime('%Y-%m-%d %H:%M') if row.latest else '—' }}</td>
         <td>{{ sources[row.latest.source] if row.latest else '—' }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
+  {% if rows|selectattr('status', 'equalto', 'none')|list %}
   <p>«Sem registo» não é consentimento: o contacto não está autorizado para essa finalidade.</p>
+  {% endif %}
 </section>
 
 <section>
