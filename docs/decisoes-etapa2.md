@@ -67,7 +67,7 @@ Requisito: determinar se um contacto pode ser considerado autorizado para uma fi
 
 - Consentimento como conceito do domínio, numa tabela só de inserção. Alternativa rejeitada: um campo booleano em `contacts`, que não guarda finalidade, momento, origem nem histórico, e perde a concessão original quando há retirada.
 - Política de histórico: o repositório só tem `INSERT` e leitura; não há `UPDATE` nem `DELETE`. A chave estrangeira para `contacts` usa `ON DELETE RESTRICT`, para que apagar um contacto não apague histórico em silêncio.
-- Ordem pelo `id` e não pela data: `recorded_at` tem resolução de segundos no SQLite, e dois eventos no mesmo instante ficariam ambríguos. O `id` cresce em ambos os backends.
+- Ordem pelo `id` e não pela data: `recorded_at` tem resolução de segundos no SQLite, e dois eventos no mesmo instante ficariam ambíguos. O `id` cresce em ambos os backends.
 - Datas: `recorded_at` tem valor por omissão na base de dados, como `created_at`, e os dois repositórios devolvem `datetime` ingénuo em UTC.
 - Finalidades: `newsletter` e `promotional`, conjunto fechado no domínio e em `CHECK` na base de dados. Acrescentar uma finalidade exige uma migração; aceite como custo da integridade. Consentimento ligado a uma campanha específica: adiado, sem requisito que o justifique.
 - Origem: `form` e `admin`. A interface web grava sempre `admin`, fixado no servidor: o valor não vem do formulário, por isso não pode ser forjado. `form` existe no domínio para um futuro formulário público de subscrição, que ainda não existe.
@@ -104,8 +104,8 @@ A integração ficou adiada. Um critério de consentimento obrigaria a duplicar 
 **Limitações conhecidas e decisões adiadas**
 
 - A imutabilidade do histórico é garantida pela API do repositório, não pela base de dados: um `UPDATE` ou `DELETE` direto em `consent_events` não é impedido. Triggers ficam adiados até haver requisito.
-- A coluna do estado mostra a data da última decisão («ltima decisão»), não o momento em que o estado atual começou: uma retirada repetida atualiza essa data.
-- O aspeto visual dos três estados depende da classe `badge` já existente; não foi confirmado que sejam visualmente distintos.
+- A coluna «Última decisão (UTC)» mostra a data da última decisão, não o momento em que o estado atual começou: uma retirada repetida atualiza essa data.
+- Os três estados (concedido, retirado e sem registo) usam todos a classe `badge` já existente, sem estilo próprio por estado. Foi considerado suficiente nesta fase; distingui-los por cor fica adiado.
 - Sem integração com segmentos e sem envio: a elegibilidade ainda não é consultada por nenhuma funcionalidade.
 - Sem origem `form` em uso: não há formulário público de subscrição.
 - Hipótese por validar: se a elegibilidade por contacto, sem distinguir emails, é suficiente quando existir envio.
