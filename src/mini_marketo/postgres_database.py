@@ -17,8 +17,21 @@ CREATE TABLE segments (
 CREATE UNIQUE INDEX ux_segments_name ON segments (lower(name));
 """
 
+CONSENT_V4 = """
+CREATE TABLE consent_events (
+    id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    contact_id  INTEGER NOT NULL REFERENCES contacts (id) ON DELETE RESTRICT,
+    purpose     TEXT NOT NULL CHECK (purpose IN ('newsletter', 'promotional')),
+    decision    TEXT NOT NULL CHECK (decision IN ('granted', 'withdrawn')),
+    source      TEXT NOT NULL CHECK (source IN ('form', 'admin')),
+    email       TEXT NOT NULL CHECK (length(email) > 0 AND email = lower(trim(email))),
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_consent_contact_purpose ON consent_events (contact_id, purpose, id);
+"""
+
 # Esquema criado de raiz na versão-base; as versões seguintes entram em MIGRATIONS (SQL do PostgreSQL).
-MIGRATIONS: list[Migration] = [(3, SEGMENTS_V3)]
+MIGRATIONS: list[Migration] = [(3, SEGMENTS_V3), (4, CONSENT_V4)]
 SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 
 _LOCK_ID = 7305001
