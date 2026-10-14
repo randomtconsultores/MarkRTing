@@ -12,11 +12,14 @@ from fastapi.templating import Jinja2Templates
 
 from .database import connect as sqlite_connect
 from .database import init_db as sqlite_init_db
+from .domain.consent import ContactNotFoundError
 from .domain.contact import ValidationError
 from .domain.segment import Criterion, Segment
 from .pagination import PAGE_SIZES, paginate, parse_page, parse_per_page
+from .repositories.consent_repository import ConsentRepository
 from .repositories.contact_repository import ContactRepository
 from .repositories.segment_repository import SegmentRepository
+from .services.consent_service import ConsentService
 from .services.contact_service import ContactService
 from .services.segment_service import SegmentService
 
@@ -25,6 +28,7 @@ DEFAULT_DB = Path(os.environ.get("MINI_MARKETO_DB", BASE.parent.parent / "data" 
 
 ServiceFactory = Callable[[], AbstractContextManager[ContactService]]
 SegmentFactory = Callable[[], AbstractContextManager[SegmentService]]
+ConsentFactory = Callable[[], AbstractContextManager[ConsentService]]
 
 FORM_ROWS = 10
 FIELD_LABELS = {
@@ -166,11 +170,44 @@ def build_segment_service_factory(
     return open_segments
 
 
+def build_consent_service_factory(
+    db_path: str | Path, database_url: str | None = None
+) -> ConsentFactory:
+    """Sem criar/migrar o esquema (já feito por build_service_factory)."""
+    if database_url:
+        from .postgres_database import connect
+        from .repositories.postgres_consent_repository import PostgresConsentRepository
+        from .repositories.postgres_contact_repository import PostgresContactRepository
+
+        @contextmanager
+        def open_consents():
+            conn = connect(database_url)
+            try:
+                yield ConsentService(
+                    PostgresConsentRepository(conn), PostgresContactRepository(conn)
+                )
+            finally:
+                conn.close()
+
+        return open_consents
+
+    @contextmanager
+    def open_consents():
+        conn = sqlite_connect(db_path)
+        try:
+            yield ConsentService(ConsentRepository(conn), ContactRepository(conn))
+        finally:
+            conn.close()
+
+    return open_consents
+
+
 def create_app(
     db_path: str | Path = DEFAULT_DB,
     database_url: str | None = None,
     service: ContactService | None = None,
     segment_service: SegmentService | None = None,
+    consent_service: ConsentService | None = None,
 ) -> FastAPI:
     if service is not None:
         # Serviços injetados (testes): partilhados, não são abertos nem fechados por pedido.
@@ -183,9 +220,16 @@ def create_app(
             if segment_service is None:
                 raise RuntimeError("create_app: segment_service não foi injetado.")
             yield segment_service
+
+        @contextmanager
+        def open_consents():
+            if consent_service is None:
+                raise RuntimeError("create_app: consent_service não foi injetado.")
+            yield consent_service
     else:
         open_service = build_service_factory(db_path, database_url)
         open_segments = build_segment_service_factory(db_path, database_url)
+        open_consents = build_consent_service_factory(db_path, database_url)
 
     templates = Jinja2Templates(directory=str(BASE / "templates"))
 
@@ -200,8 +244,13 @@ def create_app(
         with open_segments() as svc:
             yield svc
 
+    def get_consents() -> Iterator[ConsentService]:
+        with open_consents() as svc:
+            yield svc
+
     Svc = Annotated[ContactService, Depends(get_service)]
     Seg = Annotated[SegmentService, Depends(get_segments)]
+    Cons = Annotated[ConsentService, Depends(get_consents)]
 
     def page(request: Request, service: ContactService, error=None, form=None, status=200):
         return templates.TemplateResponse(
@@ -229,6 +278,16 @@ def create_app(
              "form_action": f"/segments/{segment.id}/edit",
              "submit_label": "Guardar alterações"},
             status_code=status,
+        )
+
+    def consent_page(request: Request, consents: ConsentService, contact_id: int,
+                     error=None, status=200):
+        try:
+            view = consents.view(contact_id)
+        except ContactNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return templates.TemplateResponse(
+            request, "consent.html", {**view, "error": error}, status_code=status
         )
 
     def load_segment(segments: SegmentService, segment_id: int) -> Segment:
@@ -279,6 +338,22 @@ def create_app(
     @app.post("/contacts/{contact_id}/emails/remove")
     def remove_email(request: Request, service: Svc, contact_id: int, email: str = Form("")):
         return email_action(request, service, lambda: service.remove_email(contact_id, email))
+
+    @app.get("/contacts/{contact_id}/consent")
+    def consent_view(request: Request, consents: Cons, contact_id: int):
+        return consent_page(request, consents, contact_id)
+
+    @app.post("/contacts/{contact_id}/consent")
+    def consent_record(request: Request, consents: Cons, contact_id: int,
+                       purpose: str = Form(""), decision: str = Form("")):
+        # A origem é fixada no servidor: esta interface é uma ação administrativa.
+        try:
+            consents.record(contact_id, purpose, decision, "admin")
+        except ContactNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValidationError as exc:
+            return consent_page(request, consents, contact_id, str(exc), 422)
+        return RedirectResponse(f"/contacts/{contact_id}/consent", status_code=303)
 
     @app.post("/companies")
     def create_company(request: Request, service: Svc, name: str = Form(""),

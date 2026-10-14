@@ -37,7 +37,7 @@
     <tbody>
     {% for c in contacts %}
       <tr>
-        <td>{{ c.first_name }} {{ c.last_name }}</td>
+        <td>{{ c.first_name }} {{ c.last_name }}<br><a href="/contacts/{{ c.id }}/consent">Consentimento</a></td>
         <td>
           <ul class="emails">
           {% for e in c.emails %}
