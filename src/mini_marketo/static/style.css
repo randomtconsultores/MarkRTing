@@ -11,6 +11,9 @@ table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: .4rem; border-bottom: 1px solid #ddd; vertical-align: top; }
 ul.emails { list-style: none; margin: 0 0 .3rem; padding: 0; }
 .badge { background: #e0ecff; color: #1f3a5f; font-size: .75rem; padding: .05rem .4rem; border-radius: 3px; }
+.badge-granted { background: #dcf5e4; color: #14532d; }
+.badge-withdrawn { background: #fde8e8; color: #9b1c1c; }
+.badge-none { background: #ececec; color: #444; }
 .error { background: #fde8e8; color: #9b1c1c; padding: .6rem; border-radius: 4px; }
 fieldset { border: 1px solid #ddd; border-radius: 4px; width: 100%; box-sizing: border-box; }
 .criterion { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .4rem; }

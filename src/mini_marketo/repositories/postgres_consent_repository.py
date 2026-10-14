@@ -33,6 +33,13 @@ class PostgresConsentRepository:
         ).fetchall()
         return [self._to_record(r) for r in rows]
 
+    def list_all(self) -> list[ConsentRecord]:
+        """Todo o histórico, por ordem de id (usado para avaliar segmentos)."""
+        rows = self.conn.execute(
+            f"SELECT {_COLUMNS} FROM consent_events ORDER BY id"
+        ).fetchall()
+        return [self._to_record(r) for r in rows]
+
     @staticmethod
     def _to_record(r) -> ConsentRecord:
         return ConsentRecord(

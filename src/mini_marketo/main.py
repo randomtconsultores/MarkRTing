@@ -12,9 +12,9 @@ from fastapi.templating import Jinja2Templates
 
 from .database import connect as sqlite_connect
 from .database import init_db as sqlite_init_db
-from .domain.consent import ContactNotFoundError
+from .domain.consent import PURPOSES, ContactNotFoundError
 from .domain.contact import ValidationError
-from .domain.segment import Criterion, Segment
+from .domain.segment import CONSENT_FIELD_PREFIX, Criterion, Segment
 from .pagination import PAGE_SIZES, paginate, parse_page, parse_per_page
 from .repositories.consent_repository import ConsentRepository
 from .repositories.contact_repository import ContactRepository
@@ -37,6 +37,7 @@ FIELD_LABELS = {
     "email": "Email",
     "company": "Empresa",
     "created_at": "Criado em (UTC)",
+    **{f"{CONSENT_FIELD_PREFIX}{key}": f"Consentimento: {label}" for key, label in PURPOSES.items()},
 }
 OPERATOR_LABELS = {
     "is": "é",
@@ -78,7 +79,7 @@ def new_segment_form() -> dict:
 
 def segment_form(segment: Segment) -> dict:
     rows = [
-        {"field": c.field, "operator": c.operator, "value": c.value or ""}
+        {"field": c.field, "operator": c.operator, "value": c.display_value or ""}
         for c in segment.criteria
     ]
     return {
@@ -144,6 +145,7 @@ def build_segment_service_factory(
     """Como build_service_factory, mas sem criar/migrar o esquema (já feito por ela)."""
     if database_url:
         from .postgres_database import connect
+        from .repositories.postgres_consent_repository import PostgresConsentRepository
         from .repositories.postgres_contact_repository import PostgresContactRepository
         from .repositories.postgres_segment_repository import PostgresSegmentRepository
 
@@ -152,7 +154,9 @@ def build_segment_service_factory(
             conn = connect(database_url)
             try:
                 yield SegmentService(
-                    PostgresSegmentRepository(conn), PostgresContactRepository(conn)
+                    PostgresSegmentRepository(conn),
+                    PostgresContactRepository(conn),
+                    PostgresConsentRepository(conn),
                 )
             finally:
                 conn.close()
@@ -163,7 +167,9 @@ def build_segment_service_factory(
     def open_segments():
         conn = sqlite_connect(db_path)
         try:
-            yield SegmentService(SegmentRepository(conn), ContactRepository(conn))
+            yield SegmentService(
+                SegmentRepository(conn), ContactRepository(conn), ConsentRepository(conn)
+            )
         finally:
             conn.close()
 

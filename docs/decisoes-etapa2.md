@@ -54,13 +54,13 @@ Requisito: determinar se um contacto pode ser considerado autorizado para uma fi
 
 - Registo histórico: uma decisão concreta (`ConsentRecord`, tabela `consent_events`). Nunca é alterado nem apagado.
 - Estado atual: derivado do histórico. Para cada contacto e finalidade vale o registo com o maior `id`: concedido, retirado ou sem registo.
-- Elegibilidade operacional: `is_eligible`, verdadeira apenas se o estado atual é concedido. A ausência de registo não é consentimento. Nenhuma funcionalidade a usa ainda (não há envio); existe para que o futuro envio a consulte no domínio, em vez de a reimplementar.
+- Elegibilidade operacional: `is_eligible`, verdadeira apenas se o estado atual é concedido. A ausência de registo não é consentimento. Nenhuma funcionalidade de comunicação a usa ainda (não há envio); existe para que o futuro envio a consulte no domínio, em vez de a reimplementar.
 
 **O que é novo**
 
 - `domain/consent.py`: finalidades, decisões e origens (conjuntos fechados), `ConsentRecord`, `validate_decision` e as funções puras `current_status`, `latest_record` e `is_eligible`.
 - Migração v4: tabela `consent_events` nos dois backends, mais um índice `(contact_id, purpose, id)`.
-- `ConsentRepository` e `PostgresConsentRepository` (só `add` e `list_for_contact`); `services/consent_service.py`.
+- `ConsentRepository` e `PostgresConsentRepository` (`add` e `list_for_contact`; `list_all` acrescentado no fecho da etapa, ver «Integração com segmentos»); `services/consent_service.py`.
 - Web: `GET e POST /contacts/{id}/consent`, `templates/consent.html` e um link «Consentimento» na lista de contactos.
 
 **Decisões**
@@ -90,10 +90,6 @@ O consentimento é do contacto e por finalidade. Cada evento guarda ainda uma c�
 - Se falhar, o rollback deixa a base na versão anterior.
 - Elementos e razão: chave estrangeira com `RESTRICT` (integridade e histórico), `CHECK` nos campos fechados e no email (segunda camada de defesa), índice `(contact_id, purpose, id)` (consulta do estado atual).
 
-**Segmentos**
-
-A integração ficou adiada. Um critério de consentimento obrigaria a duplicar a regra de elegibilidade na segmentação, ou a carregar o estado em cada `Contact`. Regra a respeitar quando for feita: o segmento seleciona, e a autorização verifica-se sempre à parte, pelo serviço de consentimento, independentemente da pertena ao segmento.
-
 **Validado**
 
 - Testes novos (53): `tests/test_consent.py` (17 por backend e 1 de domínio puro) e `tests/test_web_consent.py` (9 por backend). Cobrem concessão, retirada, histórico preservado, finalidades independentes, ausência de registo, contacto inexistente, dados inválidos, decisões repetidas, associação ao contacto e ao email, `CHECK` da base de dados, migração e concorrência (12 threads).
@@ -103,13 +99,42 @@ A integração ficou adiada. Um critério de consentimento obrigaria a duplicar 
 
 **Limitações conhecidas e decisões adiadas**
 
-- A imutabilidade do histórico é garantida pela API do repositório, não pela base de dados: um `UPDATE` ou `DELETE` direto em `consent_events` não é impedido. Triggers ficam adiados até haver requisito.
+- A imutabilidade do histórico é garantida pela API do repositório, não pela base de dados: um `UPDATE` ou `DELETE` direto em `consent_events` não é impedido. Triggers foram avaliados no fecho da etapa e ficam adiados por decisão explícita: bloqueariam também a limpeza manual do histórico de teste e qualquer cópia que apague e reescreva linhas, sem haver requisito que o exija.
 - A coluna «Última decisão (UTC)» mostra a data da última decisão, não o momento em que o estado atual começou: uma retirada repetida atualiza essa data.
-- Os três estados (concedido, retirado e sem registo) usam todos a classe `badge` já existente, sem estilo próprio por estado. Foi considerado suficiente nesta fase; distingui-los por cor fica adiado.
-- Sem integração com segmentos e sem envio: a elegibilidade ainda não é consultada por nenhuma funcionalidade.
+- Sem envio: a elegibilidade ainda não é consultada por nenhuma funcionalidade de comunicação; os segmentos só selecionam.
 - Sem origem `form` em uso: não há formulário público de subscrição.
 - Hipótese por validar: se a elegibilidade por contacto, sem distinguir emails, é suficiente quando existir envio.
 
 **Lição operacional**
 
 A verificação manual enganou-se duas vezes porque as apps de teste eram processos Uvicorn antigos (um arrancado na véspera) que serviam código anterior, enquanto os templates em disco já eram novos. Depois de um checkout, é preciso reiniciar a app e confirmar as rotas expostas (`/openapi.json`) antes de interpretar o que se vê.
+
+## Fecho da etapa 2
+
+O que ficou adiado na secção de consentimento e foi tratado agora, no ramo `feat/fecho-etapa2`.
+
+### Integração com segmentos
+
+- Campos `consent_newsletter` e `consent_promotional`, só com os operadores «é» e «não é» e os valores concedido, retirado ou sem registo. O valor aceita o termo em português ou a chave interna e guarda-se sempre como chave interna (`granted`, `withdrawn`, `none`); a interface mostra o termo em português (`Criterion.display_value`). Alternativa rejeitada: um `select` só para estes campos, que exigiria JavaScript.
+- Avaliação no domínio, reutilizando `current_status`: `Criterion.matches` e `Segment.matches`/`members` recebem, opcionalmente, os registos do contacto. Não há segunda implementação da regra. Alternativa rejeitada: guardar o estado em cada `Contact`, que o carregaria também em todas as outras utilizações.
+- `SegmentService` ganhou o repositório de consentimento como terceiro argumento opcional, e `list_all()` nos dois repositórios lê todo o histórico numa só consulta, só quando algum segmento usa consentimento. Sem esse repositório, tais segmentos falham com `RuntimeError`, em vez de assumirem «sem registo» em silêncio. Custo: o histórico inteiro é carregado em cada listagem ou página de membros, como já acontece com os contactos; reavaliar com volume medido.
+- Regra de autorização mantida: o segmento seleciona e a elegibilidade verifica-se sempre à parte, pelo serviço de consentimento. A página do segmento di-lo, e um teste confirma que um contacto «sem registo» pertence ao segmento mas não é elegível.
+- Sem migração nem alteração de esquema.
+
+### Estilo por estado
+
+- O `badge` ganhou uma variante por estado: `badge-granted` (verde), `badge-withdrawn` (vermelho) e `badge-none` (cinzento), escolhida a partir do estado em `consent.html`. Os «badges» continuam a levar o texto do estado, por isso a cor não é a única informação.
+
+### Decisões de âmbito
+
+- Triggers de imutabilidade: não feitos (ver as limitações acima).
+- Formulário público de subscrição e envio de emails: etapa 3, e não este fecho. Andam juntos: a aplicação não tem autenticação, por isso um formulário público que gravasse «concedido» para qualquer email deixaria qualquer pessoa registar consentimento em nome de outra. A defesa normal é a confirmação por email (double opt-in), que precisa de envio, tokens com validade e uma tabela nova.
+- Limitações da etapa 2 na segmentação (acentos, operadores todos visíveis, sem controlo otimista, cálculo em memória): mantidas, sem dados medidos que justifiquem mudar.
+
+### Validado
+
+- Testes novos: `tests/test_segment_consent_domain.py` (domínio, sem base de dados), `tests/test_segment_consent.py` (9 por backend) e `tests/test_web_segment_consent.py`; `tests/conftest.py` e `tests/test_web_consent.py` ajustados.
+- Primeira execução, com SQLite: dois testes de `test_segment_consent.py` falharam por erro do próprio teste (vários segmentos com o mesmo nome, que a restrição de nomes únicos recusou). Código de produção inalterado; corrigido nos testes (nomes derivados do critério).
+- Execução só com SQLite, depois da correção: `tests/test_segment_consent.py` com 9 aprovados e 9 ignorados (os de PostgreSQL), e a suíte completa sem falhas.
+- Execução com PostgreSQL ativo (`MINI_MARKETO_TEST_PG` definido, servidor local de testes): suíte completa com 414 aprovados, nenhum ignorado, em 24,59 s. Cobre o caminho de PostgreSQL desta alteração (`list_all` e os testes por backend).
+- Não verificado: o aspeto visual do estilo por estado no browser, coberto apenas por testes ao HTML.

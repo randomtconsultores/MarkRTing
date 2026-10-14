@@ -9,9 +9,10 @@
   <p>Entra quem cumprir <strong>{{ 'todos' if segment.match_mode == 'all' else 'qualquer um' }}</strong> dos critérios:</p>
   <ul>
   {% for c in segment.criteria %}
-    <li>{{ fields[c.field] }} {{ operators[c.operator] }}{% if c.value is not none %} <code>{{ c.value }}</code>{% endif %}</li>
+    <li>{{ fields[c.field] }} {{ operators[c.operator] }}{% if c.value is not none %} <code>{{ c.display_value }}</code>{% endif %}</li>
   {% endfor %}
   </ul>
+  <p class="hint">Pertencer a um segmento não é autorização para comunicar: a elegibilidade verifica-se à parte, pelo consentimento concedido e não retirado da finalidade.</p>
   <p><a href="/segments/{{ segment.id }}/edit">Editar</a></p>
   <form method="post" action="/segments/{{ segment.id }}/delete" class="inline">
     <button>Apagar segmento</button>

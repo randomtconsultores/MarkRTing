@@ -1,14 +1,17 @@
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from .consent import PURPOSES, STATUS_LABELS, ConsentRecord, current_status
 from .contact import Contact, ValidationError, clean_name
 
 MAX_VALUE_LENGTH = 200
 MAX_DESCRIPTION_LENGTH = 500
 MAX_CRITERIA = 20
 MATCH_MODES = ("all", "any")
+
+CONSENT_FIELD_PREFIX = "consent_"
 
 _TEXT_OPERATORS = ("is", "is_not", "contains", "starts_with")
 _VALUELESS_OPERATORS = ("is_empty", "is_not_empty")
@@ -19,6 +22,12 @@ OPERATORS_BY_FIELD = {
     "email": _TEXT_OPERATORS,
     "company": _TEXT_OPERATORS + _VALUELESS_OPERATORS,
     "created_at": ("before", "after"),
+    **{f"{CONSENT_FIELD_PREFIX}{purpose}": ("is", "is_not") for purpose in PURPOSES},
+}
+
+# Estados de consentimento aceites: a chave interna ou o termo em português.
+_CONSENT_VALUES = {key: key for key in STATUS_LABELS} | {
+    label.casefold(): key for key, label in STATUS_LABELS.items()
 }
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -32,6 +41,8 @@ class Criterion:
     Texto: comparação sem distinguir maiúsculas (os acentos contam como diferença).
     Email: os operadores positivos cumprem-se se QUALQUER email cumprir; `is_not` só se
     NENHUM email for igual. Datas: compara-se o dia em UTC (formato AAAA-MM-DD).
+    Consentimento (`consent_<finalidade>`): compara o estado atual derivado do histórico
+    (concedido, retirado ou sem registo); o valor guarda-se como chave interna.
     """
 
     field: str
@@ -48,6 +59,17 @@ class Criterion:
             )
         object.__setattr__(self, "value", self._clean_value())
 
+    @property
+    def is_consent(self) -> bool:
+        return self.field.startswith(CONSENT_FIELD_PREFIX)
+
+    @property
+    def display_value(self) -> str | None:
+        """Valor para mostrar ao utilizador (o estado de consentimento em português)."""
+        if self.value is not None and self.is_consent:
+            return STATUS_LABELS[self.value]
+        return self.value
+
     def _clean_value(self) -> str | None:
         raw = (self.value or "").strip()
         if self.operator in _VALUELESS_OPERATORS:
@@ -58,6 +80,13 @@ class Criterion:
             raise ValidationError("O critério precisa de um valor.")
         if len(raw) > MAX_VALUE_LENGTH:
             raise ValidationError(f"O valor do critério excede {MAX_VALUE_LENGTH} caracteres.")
+        if self.is_consent:
+            state = _CONSENT_VALUES.get(" ".join(raw.casefold().split()))
+            if state is None:
+                raise ValidationError(
+                    "Estado de consentimento inválido: use concedido, retirado ou sem registo."
+                )
+            return state
         if self.field == "created_at":
             if not _DATE_RE.match(raw):
                 raise ValidationError("Data inválida: use o formato AAAA-MM-DD.")
@@ -67,7 +96,12 @@ class Criterion:
                 raise ValidationError("Data inválida: use o formato AAAA-MM-DD.") from exc
         return raw
 
-    def matches(self, contact: Contact) -> bool:
+    def matches(self, contact: Contact, records: Iterable[ConsentRecord] = ()) -> bool:
+        """`records` são os registos de consentimento do contacto; só contam nos critérios
+        de consentimento (sem registos, o estado é «sem registo»)."""
+        if self.is_consent:
+            purpose = self.field[len(CONSENT_FIELD_PREFIX):]
+            return (current_status(records, purpose) == self.value) == (self.operator == "is")
         if self.field == "created_at":
             return self._matches_date(contact.created_at)
         candidates = self._candidates(contact)
@@ -133,7 +167,11 @@ def criteria_from_data(data) -> tuple[Criterion, ...]:
 
 @dataclass(frozen=True)
 class Segment:
-    """Segmento dinâmico: os membros são calculados a partir dos critérios, não guardados."""
+    """Segmento dinâmico: os membros são calculados a partir dos critérios, não guardados.
+
+    Pertencer a um segmento não é autorização para comunicar: a elegibilidade verifica-se
+    à parte, pelo consentimento (`domain.consent.is_eligible`).
+    """
 
     id: int | None
     name: str
@@ -159,9 +197,19 @@ class Segment:
             raise ValidationError("Critérios inválidos.")
         object.__setattr__(self, "criteria", criteria)
 
-    def matches(self, contact: Contact) -> bool:
-        results = (c.matches(contact) for c in self.criteria)
+    @property
+    def uses_consent(self) -> bool:
+        return any(c.is_consent for c in self.criteria)
+
+    def matches(self, contact: Contact, records: Iterable[ConsentRecord] = ()) -> bool:
+        records = tuple(records)
+        results = (c.matches(contact, records) for c in self.criteria)
         return all(results) if self.match_mode == "all" else any(results)
 
-    def members(self, contacts: Iterable[Contact]) -> list[Contact]:
-        return [c for c in contacts if self.matches(c)]
+    def members(
+        self,
+        contacts: Iterable[Contact],
+        records_by_contact: Mapping[int, Iterable[ConsentRecord]] | None = None,
+    ) -> list[Contact]:
+        by_contact = records_by_contact or {}
+        return [c for c in contacts if self.matches(c, by_contact.get(c.id, ()))]
