@@ -66,8 +66,21 @@ CREATE INDEX ix_email_messages_due ON email_messages (status, next_attempt_at);
 CREATE INDEX ix_email_messages_campaign ON email_messages (campaign_id, status);
 """
 
+# No PostgreSQL basta trocar a restrição. O nome é o que o próprio PostgreSQL deu à restrição
+# da coluna em CONSENT_V4; se não existir, a migração falha em vez de deixar a antiga ativa.
+CONSENT_SOURCE_V6 = """
+ALTER TABLE consent_events DROP CONSTRAINT consent_events_source_check;
+ALTER TABLE consent_events ADD CONSTRAINT consent_events_source_check
+    CHECK (source IN ('form', 'admin', 'unsubscribe'));
+"""
+
 # Esquema criado de raiz na versão-base; as versões seguintes entram em MIGRATIONS (SQL do PostgreSQL).
-MIGRATIONS: list[Migration] = [(3, SEGMENTS_V3), (4, CONSENT_V4), (5, CAMPAIGNS_V5)]
+MIGRATIONS: list[Migration] = [
+    (3, SEGMENTS_V3),
+    (4, CONSENT_V4),
+    (5, CAMPAIGNS_V5),
+    (6, CONSENT_SOURCE_V6),
+]
 SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 
 _LOCK_ID = 7305001

@@ -6,6 +6,10 @@ from campaign_support import T0, Setup
 from mini_marketo import send_worker
 from mini_marketo.delivery import DeliveryLimits, DeliveryWorker, backoff_seconds
 from mini_marketo.mailer import SendError
+from mini_marketo.services.unsubscribe_service import UnsubscribeService
+from mini_marketo.unsubscribe import UnsubscribeLinks
+
+LINKS = UnsubscribeLinks("https://marketing.exemplo.pt", "k" * 40)
 
 
 class FakeMailer:
@@ -13,6 +17,7 @@ class FakeMailer:
 
     def __init__(self, fail=None):
         self.sent = []
+        self.headers = {}
         self.fail = {to: list(errors) for to, errors in (fail or {}).items()}
 
     def send(self, to, subject, text, html=None, headers=None):
@@ -22,12 +27,13 @@ class FakeMailer:
             if error is not None:
                 raise error
         self.sent.append((to, subject, text, html))
+        self.headers[to] = headers
 
     def close(self):
         pass
 
 
-def make_worker(s, mailer, now=T0, **limits):
+def make_worker(s, mailer, now=T0, links=LINKS, **limits):
     sleeps = []
     worker = DeliveryWorker(
         s.repo,
@@ -35,6 +41,7 @@ def make_worker(s, mailer, now=T0, **limits):
         s.segments.consents,
         mailer,
         DeliveryLimits(**limits),
+        links,
         now=lambda: now,
         sleep=sleeps.append,
     )
@@ -86,11 +93,33 @@ def test_limits_from_env():
         DeliveryLimits.from_env({"MINI_MARKETO_SMTP_RATE": "depressa"})
 
 
-def test_the_command_refuses_to_start_without_smtp_configuration(monkeypatch, capsys):
+def clear_environment(monkeypatch):
     for name in ("HOST", "SENDER", "PORT", "SECURITY", "USERNAME", "PASSWORD"):
         monkeypatch.delenv(f"MINI_MARKETO_SMTP_{name}", raising=False)
+    for name in ("PUBLIC_URL", "SECRET_KEY", "SECRET_KEY_PREVIOUS"):
+        monkeypatch.delenv(f"MINI_MARKETO_{name}", raising=False)
+
+
+def test_the_command_refuses_to_start_without_smtp_configuration(monkeypatch, capsys):
+    clear_environment(monkeypatch)
     assert send_worker.main([]) == 2
     assert "Configuração inválida" in capsys.readouterr().err
+
+
+def test_the_command_refuses_to_start_without_the_unsubscribe_configuration(monkeypatch, capsys):
+    clear_environment(monkeypatch)
+    monkeypatch.setenv("MINI_MARKETO_SMTP_HOST", "smtp.exemplo.pt")
+    monkeypatch.setenv("MINI_MARKETO_SMTP_SENDER", "no-reply@exemplo.pt")
+    assert send_worker.main([]) == 2
+    assert "MINI_MARKETO_PUBLIC_URL" in capsys.readouterr().err
+    monkeypatch.setenv("MINI_MARKETO_PUBLIC_URL", "https://marketing.exemplo.pt")
+    assert send_worker.main([]) == 2
+    assert "MINI_MARKETO_SECRET_KEY" in capsys.readouterr().err
+
+
+def test_a_worker_cannot_be_built_without_unsubscribe_links():
+    with pytest.raises(ValueError, match="cancelamento"):
+        DeliveryWorker(None, None, None, None, DeliveryLimits(), None)
 
 
 # --- com base de dados, nos dois backends ---
@@ -106,9 +135,48 @@ def test_sends_only_to_eligible_contacts_with_the_rendered_content(db):
     assert summary.stopped == ""
     by_address = {m[0]: m for m in mailer.sent}
     assert set(by_address) == {"ana@a.pt", "rui@a.pt"}
-    assert by_address["ana@a.pt"][1:] == ("Olá Ana", "Olá Ana Silva", "<p>Ana</p>")
+    _, subject, text, html = by_address["ana@a.pt"]
+    assert subject == "Olá Ana"
+    assert text.startswith("Olá Ana Silva")
+    assert html.startswith("<p>Ana</p>")
     assert s.repo.counts(c.id) == {"sent": 2, "skipped": 1}
     assert sleeps == [0.5, 0.5]
+
+
+def test_every_email_carries_the_unsubscribe_link_and_the_one_click_headers(db):
+    s = Setup(db)
+    c = queued(s, body_html="<p>{first_name}</p>")
+    mailer = FakeMailer()
+    make_worker(s, mailer)[0].run_once()
+    for to, _, text, html in mailer.sent:
+        message = next(m for m in s.repo.list_messages(c.id) if m.email == to)
+        url = LINKS.url_for(message.id)
+        headers = mailer.headers[to]
+        assert headers["List-Unsubscribe"] == f"<{url}>"
+        assert headers["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+        assert url in text and f'href="{url}"' in html
+
+
+def test_the_link_in_a_sent_email_really_unsubscribes_that_contact(db):
+    s = Setup(db)
+    c = queued(s)
+    mailer = FakeMailer()
+    make_worker(s, mailer)[0].run_once()
+    header = mailer.headers["ana@a.pt"]["List-Unsubscribe"]
+    token = header.strip("<>").rsplit("/", 1)[1]
+    service = UnsubscribeService(s.repo, s.segments.consents, LINKS)
+    assert service.unsubscribe(token) is not None
+    assert s.consents.status(s.ana.id, "newsletter") == "withdrawn"
+    assert s.consents.status(s.rui.id, "newsletter") == "granted"
+    assert s.message_for(c.id, s.ana).status == "sent"
+
+
+def test_a_text_only_campaign_is_sent_without_an_html_part(db):
+    s = Setup(db)
+    queued(s)
+    mailer = FakeMailer()
+    make_worker(s, mailer)[0].run_once()
+    assert all(m[3] is None for m in mailer.sent)
 
 
 def test_a_second_run_sends_nothing_more(db):
@@ -139,6 +207,17 @@ def test_withdrawal_after_enqueue_is_respected_at_send_time(db):
     assert (summary.sent, summary.skipped) == (1, 1)
     rui = s.message_for(c.id, s.rui)
     assert rui.status == "skipped" and rui.skip_reason == "sem_consentimento"
+    assert [m[0] for m in mailer.sent] == ["ana@a.pt"]
+
+
+def test_an_unsubscribe_after_enqueue_is_respected_at_send_time(db):
+    s = Setup(db)
+    c = queued(s)
+    token = LINKS.token_for(s.message_for(c.id, s.rui).id)
+    UnsubscribeService(s.repo, s.segments.consents, LINKS).unsubscribe(token)
+    mailer = FakeMailer()
+    summary = make_worker(s, mailer)[0].run_once()
+    assert (summary.sent, summary.skipped) == (1, 1)
     assert [m[0] for m in mailer.sent] == ["ana@a.pt"]
 
 

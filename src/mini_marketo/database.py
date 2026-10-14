@@ -66,8 +66,33 @@ CREATE INDEX ix_email_messages_due ON email_messages (status, next_attempt_at);
 CREATE INDEX ix_email_messages_campaign ON email_messages (campaign_id, status);
 """
 
+# O SQLite não altera restrições CHECK: a tabela é reconstruída com a origem nova, copiando os
+# eventos por ordem de id (o estado atual depende do id), e o índice é recriado.
+CONSENT_SOURCE_V6 = """
+CREATE TABLE consent_events_v6 (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    contact_id  INTEGER NOT NULL REFERENCES contacts (id) ON DELETE RESTRICT,
+    purpose     TEXT NOT NULL CHECK (purpose IN ('newsletter', 'promotional')),
+    decision    TEXT NOT NULL CHECK (decision IN ('granted', 'withdrawn')),
+    source      TEXT NOT NULL CHECK (source IN ('form', 'admin', 'unsubscribe')),
+    email       TEXT NOT NULL CHECK (length(email) > 0 AND email = lower(trim(email))),
+    recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now'))
+);
+INSERT INTO consent_events_v6 (id, contact_id, purpose, decision, source, email, recorded_at)
+    SELECT id, contact_id, purpose, decision, source, email, recorded_at
+    FROM consent_events ORDER BY id;
+DROP TABLE consent_events;
+ALTER TABLE consent_events_v6 RENAME TO consent_events;
+CREATE INDEX ix_consent_contact_purpose ON consent_events (contact_id, purpose, id);
+"""
+
 # Esquema criado de raiz na versão-base; as versões seguintes entram em MIGRATIONS (SQL do SQLite).
-MIGRATIONS: list[Migration] = [(3, SEGMENTS_V3), (4, CONSENT_V4), (5, CAMPAIGNS_V5)]
+MIGRATIONS: list[Migration] = [
+    (3, SEGMENTS_V3),
+    (4, CONSENT_V4),
+    (5, CAMPAIGNS_V5),
+    (6, CONSENT_SOURCE_V6),
+]
 SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 
 COMPANIES_DDL = """

@@ -16,6 +16,7 @@ from .domain.campaign import CAMPAIGN_STATUSES, MESSAGE_STATUSES, SKIP_REASONS
 from .domain.consent import PURPOSES, ContactNotFoundError
 from .domain.contact import ValidationError
 from .domain.segment import CONSENT_FIELD_PREFIX, Criterion, Segment
+from .mailer import ConfigError
 from .pagination import PAGE_SIZES, paginate, parse_page, parse_per_page
 from .repositories.campaign_repository import CampaignRepository
 from .repositories.consent_repository import ConsentRepository
@@ -25,6 +26,8 @@ from .services.campaign_service import CampaignService
 from .services.consent_service import ConsentService
 from .services.contact_service import ContactService
 from .services.segment_service import SegmentService
+from .services.unsubscribe_service import UnsubscribeService
+from .unsubscribe import UnsubscribeLinks
 
 BASE = Path(__file__).parent
 DEFAULT_DB = Path(os.environ.get("MINI_MARKETO_DB", BASE.parent.parent / "data" / "mini_marketo.db"))
@@ -33,6 +36,7 @@ ServiceFactory = Callable[[], AbstractContextManager[ContactService]]
 SegmentFactory = Callable[[], AbstractContextManager[SegmentService]]
 ConsentFactory = Callable[[], AbstractContextManager[ConsentService]]
 CampaignFactory = Callable[[], AbstractContextManager[CampaignService]]
+UnsubscribeFactory = Callable[[], AbstractContextManager[UnsubscribeService]]
 
 FORM_ROWS = 10
 FIELD_LABELS = {
@@ -250,6 +254,47 @@ def build_campaign_service_factory(
     return open_campaigns
 
 
+def load_unsubscribe_links() -> UnsubscribeLinks | None:
+    """None se o URL público ou a chave não estão configurados: nenhuma ligação é aceite."""
+    try:
+        return UnsubscribeLinks.from_env()
+    except ConfigError:
+        return None
+
+
+def build_unsubscribe_service_factory(
+    db_path: str | Path, database_url: str | None = None
+) -> UnsubscribeFactory:
+    """Sem criar/migrar o esquema (já feito por build_service_factory)."""
+    links = load_unsubscribe_links()
+    if database_url:
+        from .postgres_database import connect
+        from .repositories.postgres_campaign_repository import PostgresCampaignRepository
+        from .repositories.postgres_consent_repository import PostgresConsentRepository
+
+        @contextmanager
+        def open_unsubscribe():
+            conn = connect(database_url)
+            try:
+                yield UnsubscribeService(
+                    PostgresCampaignRepository(conn), PostgresConsentRepository(conn), links
+                )
+            finally:
+                conn.close()
+
+        return open_unsubscribe
+
+    @contextmanager
+    def open_unsubscribe():
+        conn = sqlite_connect(db_path)
+        try:
+            yield UnsubscribeService(CampaignRepository(conn), ConsentRepository(conn), links)
+        finally:
+            conn.close()
+
+    return open_unsubscribe
+
+
 def create_app(
     db_path: str | Path = DEFAULT_DB,
     database_url: str | None = None,
@@ -257,6 +302,7 @@ def create_app(
     segment_service: SegmentService | None = None,
     consent_service: ConsentService | None = None,
     campaign_service: CampaignService | None = None,
+    unsubscribe_service: UnsubscribeService | None = None,
 ) -> FastAPI:
     if service is not None:
         # Serviços injetados (testes): partilhados, não são abertos nem fechados por pedido.
@@ -281,11 +327,18 @@ def create_app(
             if campaign_service is None:
                 raise RuntimeError("create_app: campaign_service não foi injetado.")
             yield campaign_service
+
+        @contextmanager
+        def open_unsubscribe():
+            if unsubscribe_service is None:
+                raise RuntimeError("create_app: unsubscribe_service não foi injetado.")
+            yield unsubscribe_service
     else:
         open_service = build_service_factory(db_path, database_url)
         open_segments = build_segment_service_factory(db_path, database_url)
         open_consents = build_consent_service_factory(db_path, database_url)
         open_campaigns = build_campaign_service_factory(db_path, database_url)
+        open_unsubscribe = build_unsubscribe_service_factory(db_path, database_url)
 
     templates = Jinja2Templates(directory=str(BASE / "templates"))
 
@@ -308,10 +361,15 @@ def create_app(
         with open_campaigns() as svc:
             yield svc
 
+    def get_unsubscribe() -> Iterator[UnsubscribeService]:
+        with open_unsubscribe() as svc:
+            yield svc
+
     Svc = Annotated[ContactService, Depends(get_service)]
     Seg = Annotated[SegmentService, Depends(get_segments)]
     Cons = Annotated[ConsentService, Depends(get_consents)]
     Camp = Annotated[CampaignService, Depends(get_campaigns)]
+    Unsub = Annotated[UnsubscribeService, Depends(get_unsubscribe)]
 
     def page(request: Request, service: ContactService, error=None, form=None, status=200):
         return templates.TemplateResponse(
@@ -374,6 +432,17 @@ def create_app(
              "error": error},
             status_code=status,
         )
+
+    def unsubscribe_response(request: Request, view, token: str, done: bool):
+        # A resposta é sempre 200, sem redirecionar (o cancelamento com um clique do RFC 8058 não
+        # segue redirecionamentos). O token está no URL: nem cache nem Referer o devem propagar.
+        response = templates.TemplateResponse(
+            request, "unsubscribe.html",
+            {"view": view, "token": token, "done": done, "purposes": PURPOSES},
+        )
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     def load_segment(segments: SegmentService, segment_id: int) -> Segment:
         try:
@@ -577,6 +646,23 @@ def create_app(
         except ValidationError as exc:
             return campaign_page(request, campaigns, campaign_id, str(exc), 422)
         return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
+
+    @app.get("/unsubscribe/{token}")
+    def unsubscribe_confirm_page(request: Request, unsub: Unsub, token: str):
+        # Só mostra a confirmação: quem faz GET (por exemplo, verificadores de ligações) não cancela nada.
+        view = unsub.preview(token)
+        if view is None:
+            raise HTTPException(status_code=404, detail="Ligação inválida ou expirada.")
+        return unsubscribe_response(request, view, token, done=False)
+
+    @app.post("/unsubscribe/{token}")
+    def unsubscribe_now(request: Request, unsub: Unsub, token: str):
+        # Sem campos obrigatórios: o cancelamento com um clique (RFC 8058) envia
+        # `List-Unsubscribe=One-Click` e o formulário da página não envia nada.
+        view = unsub.unsubscribe(token)
+        if view is None:
+            raise HTTPException(status_code=404, detail="Ligação inválida ou expirada.")
+        return unsubscribe_response(request, view, token, done=True)
 
     return app
 

@@ -69,3 +69,31 @@ def test_render_does_not_interpret_template_syntax_in_names():
     contact = Contact(1, "{last_name}", "{{ 7*7 }}", ("ana@a.pt",))
     rendered = render(make(body_text="{first_name}|{last_name}"), contact)
     assert rendered.text == "{last_name}|{{ 7*7 }}"
+
+
+URL = "https://marketing.exemplo.pt/unsubscribe/1.abc"
+
+
+def test_render_without_a_link_adds_no_footer():
+    contact = Contact(1, "Ana", "Silva", ("ana@a.pt",))
+    rendered = render(make(body_html="<p>x</p>"), contact)
+    assert URL not in rendered.text and rendered.html == "<p>x</p>"
+
+
+def test_render_adds_the_unsubscribe_link_to_text_and_html():
+    contact = Contact(1, "Ana", "Silva", ("ana@a.pt",))
+    rendered = render(make(body_text="Texto", body_html="<p>x</p>"), contact, unsubscribe_url=URL)
+    assert rendered.text.startswith("Texto") and rendered.text.rstrip().endswith(URL)
+    assert f'href="{URL}"' in rendered.html and rendered.html.startswith("<p>x</p>")
+
+
+def test_a_text_only_campaign_stays_text_only_with_the_link():
+    contact = Contact(1, "Ana", "Silva", ("ana@a.pt",))
+    rendered = render(make(), contact, unsubscribe_url=URL)
+    assert URL in rendered.text and rendered.html is None
+
+
+def test_the_link_in_the_html_is_escaped():
+    contact = Contact(1, "Ana", "Silva", ("ana@a.pt",))
+    rendered = render(make(body_html="<p>x</p>"), contact, unsubscribe_url='https://a.pt/"><b>')
+    assert '"><b>' not in rendered.html and "&quot;&gt;&lt;b&gt;" in rendered.html

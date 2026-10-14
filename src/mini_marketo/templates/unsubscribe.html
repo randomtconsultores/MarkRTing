@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% if done %}Subscrição cancelada{% else %}Cancelar subscrição{% endif %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+  {% if done %}
+    <h1>Subscrição cancelada</h1>
+    <p>O endereço {{ view.masked_email }} deixou de receber «{{ purposes[view.purpose] }}».</p>
+  {% elif view.already_withdrawn %}
+    <h1>Subscrição já cancelada</h1>
+    <p>O endereço {{ view.masked_email }} já não recebe «{{ purposes[view.purpose] }}».</p>
+  {% else %}
+    <h1>Cancelar subscrição</h1>
+    <p>Quer deixar de receber «{{ purposes[view.purpose] }}» em {{ view.masked_email }}?</p>
+    <form method="post" action="/unsubscribe/{{ token }}">
+      <button>Cancelar subscrição</button>
+    </form>
+  {% endif %}
+  </main>
+</body>
+</html>
