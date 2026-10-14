@@ -16,3 +16,4 @@ fieldset { border: 1px solid #ddd; border-radius: 4px; width: 100%; box-sizing: 
 .criterion { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .4rem; }
 .criterion input { flex: 1; min-width: 10rem; }
 .hint { font-size: .8rem; color: #555; margin: .3rem 0 0; }
+.pager { display: flex; gap: 1rem; align-items: center; margin-top: .6rem; }

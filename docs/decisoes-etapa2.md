@@ -32,9 +32,16 @@ Requisito: agrupar contactos por regras (por exemplo, «da empresa X» ou «cria
 - Correção ao formulário: as linhas de critérios eram cortadas às 10. Com a edição, um segmento com mais critérios perderia os restantes ao ser aberto para editar. As linhas existentes nunca são cortadas; completam-se apenas as linhas vazias até 10.
 - Concorrência: sem controlo otimista. Se duas pessoas editarem o mesmo segmento, vale a última gravação. Aceitável nesta fase.
 
+## Paginação dos membros
+
+- Paginação em memória (`pagination.py`, funções puras), depois de calcular os membros em Python. É a única opção coerente com a avaliação dos critérios em Python. Limite assumido: o cálculo continua a carregar todos os contactos; a paginação só evita enviar ao browser uma página gigante. Alternativa rejeitada: `LIMIT/OFFSET` em SQL, que obrigaria a traduzir os critérios para SQL.
+- O utilizador escolhe o tamanho da página numa lista fechada (10, 25, 50 e 100; 25 por omissão). Alternativa rejeitada: campo numérico livre, que aceitaria zero, negativos ou valores enormes.
+- Parâmetros `page` e `per_page` na URL (`/segments/{id}?per_page=50&page=2`), lidos como texto: um valor inválido volta ao valor por omissão e uma página fora do intervalo é ajustada à última, em vez de devolver erro. O seletor é um formulário GET sem JavaScript e mudar o tamanho volta à página 1; as ligações «anterior» e «seguinte» guardam o tamanho escolhido.
+- A contagem de membros na listagem `/segments` não muda.
+- Sem ordenação escolhida pelo utilizador: os membros aparecem pela ordem dos contactos (mais recentes primeiro).
+
 **Limitações conhecidas e pendentes**
 
-- Sem paginação na lista de membros.
 - A comparação de texto não distingue maiúsculas, mas distingue acentos.
 - Operadores mostrados todos juntos no formulário; a combinação inválida é recusada com mensagem, em vez de filtrada na interface.
 - Consentimento continua por tratar: um segmento não decide quem pode ser contactado.
