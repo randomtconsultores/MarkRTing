@@ -104,11 +104,14 @@ def test_base_de_dados_rejeita_valores_invalidos(ctx):
 
 def test_migracao_v4_preserva_dados(ctx):
     db, consents, c = ctx
+    # Desfaz também a v5 (campanhas), que depende de contactos e segmentos mas não da v4.
+    db.execute("DROP TABLE email_messages")
+    db.execute("DROP TABLE campaigns")
     db.execute("DROP TABLE consent_events")
     db.set_version(3)
     again = db.reopen()
     try:
-        assert again.version() == 4
+        assert again.version() == again.module.SCHEMA_VERSION
         assert [x.id for x in again.service().list_contacts()] == [c.id]
         again.consent_service().record(c.id, "newsletter", "granted", "admin")
     finally:

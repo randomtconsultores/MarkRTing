@@ -30,8 +30,44 @@ CREATE TABLE consent_events (
 CREATE INDEX ix_consent_contact_purpose ON consent_events (contact_id, purpose, id);
 """
 
+CAMPAIGNS_V5 = """
+CREATE TABLE campaigns (
+    id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name         TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    subject      TEXT NOT NULL CHECK (length(trim(subject)) > 0),
+    body_text    TEXT NOT NULL CHECK (length(trim(body_text)) > 0),
+    body_html    TEXT NOT NULL DEFAULT '',
+    purpose      TEXT NOT NULL CHECK (purpose IN ('newsletter', 'promotional')),
+    segment_id   INTEGER REFERENCES segments (id) ON DELETE SET NULL,
+    segment_name TEXT NOT NULL CHECK (length(trim(segment_name)) > 0),
+    status       TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'queued')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    queued_at    TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX ux_campaigns_name ON campaigns (lower(name));
+
+CREATE TABLE email_messages (
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    campaign_id     INTEGER NOT NULL REFERENCES campaigns (id) ON DELETE RESTRICT,
+    contact_id      INTEGER NOT NULL REFERENCES contacts (id) ON DELETE RESTRICT,
+    email           TEXT NOT NULL CHECK (length(email) > 0 AND email = lower(trim(email))),
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'skipped')),
+    attempts        INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    claimed_at      TIMESTAMPTZ,
+    last_error      TEXT NOT NULL DEFAULT '',
+    skip_reason     TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sent_at         TIMESTAMPTZ,
+    CONSTRAINT email_messages_campaign_contact_key UNIQUE (campaign_id, contact_id)
+);
+CREATE INDEX ix_email_messages_due ON email_messages (status, next_attempt_at);
+CREATE INDEX ix_email_messages_campaign ON email_messages (campaign_id, status);
+"""
+
 # Esquema criado de raiz na versão-base; as versões seguintes entram em MIGRATIONS (SQL do PostgreSQL).
-MIGRATIONS: list[Migration] = [(3, SEGMENTS_V3), (4, CONSENT_V4)]
+MIGRATIONS: list[Migration] = [(3, SEGMENTS_V3), (4, CONSENT_V4), (5, CAMPAIGNS_V5)]
 SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 
 _LOCK_ID = 7305001
