@@ -5,7 +5,9 @@ main { max-width: 60rem; margin: 1rem auto; padding: 0 1rem; }
 form { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
 form.inline { display: inline-flex; gap: .3rem; margin: .1rem 0; }
 label { display: flex; flex-direction: column; font-size: .85rem; gap: .2rem; }
-input, select, button { padding: .4rem; font: inherit; }
+label.wide { width: 100%; }
+input, select, button, textarea { padding: .4rem; font: inherit; }
+textarea { width: 100%; box-sizing: border-box; }
 form.inline button { padding: .1rem .4rem; font-size: .8rem; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: .4rem; border-bottom: 1px solid #ddd; vertical-align: top; }
