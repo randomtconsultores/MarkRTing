@@ -7,6 +7,7 @@ import pytest
 from mini_marketo import database as sqlite_database
 from mini_marketo.database import connect as sqlite_connect
 from mini_marketo.database import init_db as sqlite_init_db
+from mini_marketo.repositories.consent_repository import ConsentRepository
 from mini_marketo.repositories.contact_repository import ContactRepository
 from mini_marketo.repositories.segment_repository import SegmentRepository
 from mini_marketo.services.contact_service import ContactService
@@ -107,7 +108,14 @@ class Db:
 
     def segment_service(self):
         if self.kind == "sqlite":
-            return SegmentService(SegmentRepository(self.conn), ContactRepository(self.conn))
+            return SegmentService(
+                SegmentRepository(self.conn),
+                ContactRepository(self.conn),
+                ConsentRepository(self.conn),
+            )
+        from mini_marketo.repositories.postgres_consent_repository import (
+            PostgresConsentRepository,
+        )
         from mini_marketo.repositories.postgres_contact_repository import (
             PostgresContactRepository,
         )
@@ -116,15 +124,15 @@ class Db:
         )
 
         return SegmentService(
-            PostgresSegmentRepository(self.conn), PostgresContactRepository(self.conn)
+            PostgresSegmentRepository(self.conn),
+            PostgresContactRepository(self.conn),
+            PostgresConsentRepository(self.conn),
         )
 
     def consent_service(self):
         from mini_marketo.services.consent_service import ConsentService
 
         if self.kind == "sqlite":
-            from mini_marketo.repositories.consent_repository import ConsentRepository
-
             return ConsentService(ConsentRepository(self.conn), ContactRepository(self.conn))
         from mini_marketo.repositories.postgres_consent_repository import (
             PostgresConsentRepository,

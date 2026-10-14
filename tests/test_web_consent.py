@@ -2,9 +2,9 @@ from fastapi.testclient import TestClient
 
 from mini_marketo.main import create_app
 
-NO_RECORD = '<span class="badge">Sem registo</span>'
-GRANTED = '<span class="badge">Concedido</span>'
-WITHDRAWN = '<span class="badge">Retirado</span>'
+NO_RECORD = '<span class="badge badge-none">Sem registo</span>'
+GRANTED = '<span class="badge badge-granted">Concedido</span>'
+WITHDRAWN = '<span class="badge badge-withdrawn">Retirado</span>'
 NOTE = "não é consentimento"
 
 
