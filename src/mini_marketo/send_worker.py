@@ -1,7 +1,9 @@
 """Processo de envio: `python -m mini_marketo.send_worker [--loop]`.
 
-Lê o SMTP e os limites do ambiente (MINI_MARKETO_SMTP_*), usa a mesma base de dados da
-aplicação (MINI_MARKETO_DB ou MINI_MARKETO_DATABASE_URL) e envia as mensagens pendentes.
+Lê o SMTP e os limites do ambiente (MINI_MARKETO_SMTP_*), o URL público e a chave das ligações
+de cancelamento (MINI_MARKETO_PUBLIC_URL e MINI_MARKETO_SECRET_KEY), usa a mesma base de dados
+da aplicação (MINI_MARKETO_DB ou MINI_MARKETO_DATABASE_URL) e envia as mensagens pendentes.
+Sem ligação de cancelamento configurada, não arranca.
 """
 
 import argparse
@@ -15,6 +17,7 @@ from .database import init_db as sqlite_init_db
 from .delivery import DeliveryLimits, DeliveryWorker
 from .mailer import SmtpConfig, SmtpMailer
 from .main import DEFAULT_DB
+from .unsubscribe import UnsubscribeLinks
 
 log = logging.getLogger("mini_marketo.send_worker")
 
@@ -58,6 +61,7 @@ def main(argv=None) -> int:
     try:
         config = SmtpConfig.from_env()
         limits = DeliveryLimits.from_env()
+        links = UnsubscribeLinks.from_env()
     except ValueError as exc:
         print(f"Configuração inválida: {exc}", file=sys.stderr)
         return 2
@@ -65,7 +69,7 @@ def main(argv=None) -> int:
         DEFAULT_DB, os.environ.get("MINI_MARKETO_DATABASE_URL")
     )
     mailer = SmtpMailer(config)
-    worker = DeliveryWorker(campaigns, contacts, consents, mailer, limits)
+    worker = DeliveryWorker(campaigns, contacts, consents, mailer, limits, links)
     try:
         while True:
             summary = worker.run_once()

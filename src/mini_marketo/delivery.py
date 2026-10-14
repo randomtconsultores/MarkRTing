@@ -83,15 +83,22 @@ class DeliveryWorker:
     """Envia as mensagens pendentes. Nunca corre dentro de um pedido web.
 
     `campaigns`, `contacts` e `consents` são repositórios do mesmo backend; `mailer` tem
-    `send(to, subject, text, html)`. O consentimento verifica-se de novo a cada mensagem.
+    `send(to, subject, text, html, headers)`; `links` é o `UnsubscribeLinks`, obrigatório: não
+    se envia nenhuma mensagem sem ligação de cancelamento. O consentimento verifica-se de novo
+    a cada mensagem.
     """
 
-    def __init__(self, campaigns, contacts, consents, mailer, limits, now=utc_now, sleep=time.sleep):
+    def __init__(
+        self, campaigns, contacts, consents, mailer, limits, links, now=utc_now, sleep=time.sleep
+    ):
+        if links is None:
+            raise ValueError("O envio exige uma ligação de cancelamento de subscrição.")
         self.campaigns = campaigns
         self.contacts = contacts
         self.consents = consents
         self.mailer = mailer
         self.limits = limits
+        self.links = links
         self.now = now
         self.sleep = sleep
 
@@ -149,9 +156,16 @@ class DeliveryWorker:
             return self._skip(message, SKIP_EMAIL_REMOVED)
         if not is_eligible(self.consents.list_for_contact(contact.id), campaign.purpose):
             return self._skip(message, SKIP_NO_CONSENT)
-        rendered = render(campaign, contact)
+        unsubscribe_url = self.links.url_for(message.id)
+        rendered = render(campaign, contact, unsubscribe_url=unsubscribe_url)
+        headers = {
+            "List-Unsubscribe": f"<{unsubscribe_url}>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        }
         try:
-            self.mailer.send(message.email, rendered.subject, rendered.text, rendered.html)
+            self.mailer.send(
+                message.email, rendered.subject, rendered.text, rendered.html, headers
+            )
         except Exception as exc:
             return self._on_error(message, exc if isinstance(exc, SendError) else classify(exc))
         self.campaigns.mark_sent(message.id, self.now())
