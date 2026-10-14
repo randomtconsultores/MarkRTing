@@ -8,7 +8,7 @@
 - **Ligação SQLite única** com `check_same_thread=False`: suficiente para a v1. Substituída por uma ligação por pedido (ver «Correção - Ligação por pedido»).
 - **Sem interface abstrata de repositório**: os testes usam SQLite em memória. Só se abstrai com uma segunda implementação real.
 - **Datas em UTC**: `created_at` é guardado e mostrado em UTC (cabeçalho da coluna indica-o). Conversão para hora local fica para quando for necessário.
-- **Pendente**: política ao apagar empresas (atualmente ON DELETE SET NULL), paginação, consentimento (finalidade, origem, momento, histórico).
+- **Pendente**: política ao apagar empresas (atualmente ON DELETE SET NULL). Paginação e consentimento (finalidade, origem, momento, histórico) foram resolvidos na etapa 2 (ver `decisoes-etapa2.md`).
 
 ## Experiência 1 - Emails múltiplos por contacto
 
