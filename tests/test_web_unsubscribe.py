@@ -82,13 +82,26 @@ def test_get_after_unsubscribing_says_it_is_already_cancelled(db):
 
 @pytest.mark.parametrize(
     "token",
-    ["lixo", "1.AAAAAAAAAAAAAAAAAAAAAA", "99999.AAAAAAAAAAAAAAAAAAAAAA", "<script>alert(1)</script>"],
+    ["lixo", "1.AAAAAAAAAAAAAAAAAAAAAA", "99999.AAAAAAAAAAAAAAAAAAAAAA", "<script>alert(1)"],
 )
 def test_invalid_links_get_the_same_generic_404(db, token):
     client, s, _ = setup(db)
     for response in (client.get(f"/unsubscribe/{token}"), client.post(f"/unsubscribe/{token}")):
         assert response.status_code == 404
         assert "inválida ou expirada" in response.text
+        assert "<script>alert" not in response.text
+    assert s.consents.status(s.ana.id, "newsletter") == "granted"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["<script>alert(1)</script>", "a/b", "%3Cscript%3Ealert(1)%3C%2Fscript%3E"],
+)
+def test_paths_that_do_not_match_the_route_get_a_404_and_reflect_nothing(db, path):
+    # Um token com barra nem chega à rota: o 404 é o do próprio servidor, sem eco do pedido.
+    client, s, _ = setup(db)
+    for response in (client.get(f"/unsubscribe/{path}"), client.post(f"/unsubscribe/{path}")):
+        assert response.status_code == 404
         assert "<script>alert" not in response.text
     assert s.consents.status(s.ana.id, "newsletter") == "granted"
 
