@@ -119,6 +119,24 @@ class Db:
             PostgresSegmentRepository(self.conn), PostgresContactRepository(self.conn)
         )
 
+    def consent_service(self):
+        from mini_marketo.services.consent_service import ConsentService
+
+        if self.kind == "sqlite":
+            from mini_marketo.repositories.consent_repository import ConsentRepository
+
+            return ConsentService(ConsentRepository(self.conn), ContactRepository(self.conn))
+        from mini_marketo.repositories.postgres_consent_repository import (
+            PostgresConsentRepository,
+        )
+        from mini_marketo.repositories.postgres_contact_repository import (
+            PostgresContactRepository,
+        )
+
+        return ConsentService(
+            PostgresConsentRepository(self.conn), PostgresContactRepository(self.conn)
+        )
+
     def reopen(self):
         return self._reopen()
 
