@@ -15,7 +15,9 @@ def setup(db):
 
 
 def create(segments, operator, value, field="consent_newsletter"):
-    return segments.create_segment("S", "", "all", [Criterion(field, operator, value)])
+    # O nome do segmento é único: deriva-se do critério para permitir vários por teste.
+    name = f"{field} {operator} {value}"
+    return segments.create_segment(name, "", "all", [Criterion(field, operator, value)])
 
 
 def names(members):
