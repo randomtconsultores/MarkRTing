@@ -12,13 +12,16 @@ from fastapi.templating import Jinja2Templates
 
 from .database import connect as sqlite_connect
 from .database import init_db as sqlite_init_db
+from .domain.campaign import CAMPAIGN_STATUSES, MESSAGE_STATUSES, SKIP_REASONS
 from .domain.consent import PURPOSES, ContactNotFoundError
 from .domain.contact import ValidationError
 from .domain.segment import CONSENT_FIELD_PREFIX, Criterion, Segment
 from .pagination import PAGE_SIZES, paginate, parse_page, parse_per_page
+from .repositories.campaign_repository import CampaignRepository
 from .repositories.consent_repository import ConsentRepository
 from .repositories.contact_repository import ContactRepository
 from .repositories.segment_repository import SegmentRepository
+from .services.campaign_service import CampaignService
 from .services.consent_service import ConsentService
 from .services.contact_service import ContactService
 from .services.segment_service import SegmentService
@@ -29,6 +32,7 @@ DEFAULT_DB = Path(os.environ.get("MINI_MARKETO_DB", BASE.parent.parent / "data" 
 ServiceFactory = Callable[[], AbstractContextManager[ContactService]]
 SegmentFactory = Callable[[], AbstractContextManager[SegmentService]]
 ConsentFactory = Callable[[], AbstractContextManager[ConsentService]]
+CampaignFactory = Callable[[], AbstractContextManager[CampaignService]]
 
 FORM_ROWS = 10
 FIELD_LABELS = {
@@ -208,12 +212,51 @@ def build_consent_service_factory(
     return open_consents
 
 
+def build_campaign_service_factory(
+    db_path: str | Path, database_url: str | None = None
+) -> CampaignFactory:
+    """Sem criar/migrar o esquema (já feito por build_service_factory)."""
+    if database_url:
+        from .postgres_database import connect
+        from .repositories.postgres_campaign_repository import PostgresCampaignRepository
+        from .repositories.postgres_consent_repository import PostgresConsentRepository
+        from .repositories.postgres_contact_repository import PostgresContactRepository
+        from .repositories.postgres_segment_repository import PostgresSegmentRepository
+
+        @contextmanager
+        def open_campaigns():
+            conn = connect(database_url)
+            try:
+                contacts = PostgresContactRepository(conn)
+                consents = PostgresConsentRepository(conn)
+                segments = SegmentService(PostgresSegmentRepository(conn), contacts, consents)
+                yield CampaignService(PostgresCampaignRepository(conn), segments, consents)
+            finally:
+                conn.close()
+
+        return open_campaigns
+
+    @contextmanager
+    def open_campaigns():
+        conn = sqlite_connect(db_path)
+        try:
+            contacts = ContactRepository(conn)
+            consents = ConsentRepository(conn)
+            segments = SegmentService(SegmentRepository(conn), contacts, consents)
+            yield CampaignService(CampaignRepository(conn), segments, consents)
+        finally:
+            conn.close()
+
+    return open_campaigns
+
+
 def create_app(
     db_path: str | Path = DEFAULT_DB,
     database_url: str | None = None,
     service: ContactService | None = None,
     segment_service: SegmentService | None = None,
     consent_service: ConsentService | None = None,
+    campaign_service: CampaignService | None = None,
 ) -> FastAPI:
     if service is not None:
         # Serviços injetados (testes): partilhados, não são abertos nem fechados por pedido.
@@ -232,10 +275,17 @@ def create_app(
             if consent_service is None:
                 raise RuntimeError("create_app: consent_service não foi injetado.")
             yield consent_service
+
+        @contextmanager
+        def open_campaigns():
+            if campaign_service is None:
+                raise RuntimeError("create_app: campaign_service não foi injetado.")
+            yield campaign_service
     else:
         open_service = build_service_factory(db_path, database_url)
         open_segments = build_segment_service_factory(db_path, database_url)
         open_consents = build_consent_service_factory(db_path, database_url)
+        open_campaigns = build_campaign_service_factory(db_path, database_url)
 
     templates = Jinja2Templates(directory=str(BASE / "templates"))
 
@@ -254,9 +304,14 @@ def create_app(
         with open_consents() as svc:
             yield svc
 
+    def get_campaigns() -> Iterator[CampaignService]:
+        with open_campaigns() as svc:
+            yield svc
+
     Svc = Annotated[ContactService, Depends(get_service)]
     Seg = Annotated[SegmentService, Depends(get_segments)]
     Cons = Annotated[ConsentService, Depends(get_consents)]
+    Camp = Annotated[CampaignService, Depends(get_campaigns)]
 
     def page(request: Request, service: ContactService, error=None, form=None, status=200):
         return templates.TemplateResponse(
@@ -294,6 +349,30 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return templates.TemplateResponse(
             request, "consent.html", {**view, "error": error}, status_code=status
+        )
+
+    def campaigns_page(request: Request, campaigns: CampaignService, error=None, form=None,
+                       status=200):
+        return templates.TemplateResponse(
+            request, "campaigns.html",
+            {"campaigns": campaigns.list_campaigns(), "segments": campaigns.list_segments(),
+             "purposes": PURPOSES, "statuses": CAMPAIGN_STATUSES,
+             "error": error, "form": form or {}},
+            status_code=status,
+        )
+
+    def campaign_page(request: Request, campaigns: CampaignService, campaign_id: int,
+                      error=None, status=200):
+        try:
+            view = campaigns.summary(campaign_id)
+        except ValidationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return templates.TemplateResponse(
+            request, "campaign.html",
+            {**view, "purposes": PURPOSES, "statuses": CAMPAIGN_STATUSES,
+             "message_statuses": MESSAGE_STATUSES, "skip_reasons": SKIP_REASONS,
+             "error": error},
+            status_code=status,
         )
 
     def load_segment(segments: SegmentService, segment_id: int) -> Segment:
@@ -455,6 +534,49 @@ def create_app(
         except ValidationError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return RedirectResponse("/segments", status_code=303)
+
+    @app.get("/campaigns")
+    def campaigns_list(request: Request, campaigns: Camp):
+        return campaigns_page(request, campaigns)
+
+    @app.post("/campaigns")
+    def create_campaign(
+        request: Request,
+        campaigns: Camp,
+        name: str = Form(""),
+        subject: str = Form(""),
+        body_text: str = Form(""),
+        body_html: str = Form(""),
+        purpose: str = Form(""),
+        segment_id: str = Form(""),
+    ):
+        form = {"name": name, "subject": subject, "body_text": body_text,
+                "body_html": body_html, "purpose": purpose, "segment_id": segment_id}
+        try:
+            sid = int(segment_id)
+        except ValueError:
+            return campaigns_page(request, campaigns, "Escolha um segmento.", form, 422)
+        try:
+            created = campaigns.create_campaign(name, subject, body_text, body_html, purpose, sid)
+        except ValidationError as exc:
+            return campaigns_page(request, campaigns, str(exc), form, 422)
+        return RedirectResponse(f"/campaigns/{created.id}", status_code=303)
+
+    @app.get("/campaigns/{campaign_id}")
+    def campaign_detail(request: Request, campaigns: Camp, campaign_id: int):
+        return campaign_page(request, campaigns, campaign_id)
+
+    @app.post("/campaigns/{campaign_id}/enqueue")
+    def campaign_enqueue(request: Request, campaigns: Camp, campaign_id: int):
+        try:
+            campaigns.get_campaign(campaign_id)
+        except ValidationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            campaigns.enqueue(campaign_id)
+        except ValidationError as exc:
+            return campaign_page(request, campaigns, campaign_id, str(exc), 422)
+        return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
 
     return app
 
