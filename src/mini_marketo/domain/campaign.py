@@ -118,10 +118,29 @@ def _fill(template: str, contact: Contact, escape: bool) -> str:
     return _PLACEHOLDER.sub(replace, template)
 
 
-def render(campaign: Campaign, contact: Contact) -> RenderedEmail:
-    """Substitui {first_name} e {last_name}. No HTML os valores são escapados; nada é interpretado."""
+def _footer_text(url: str) -> str:
+    return f"\n\n--\nPara deixar de receber estas mensagens, abra esta ligação: {url}"
+
+
+def _footer_html(url: str) -> str:
+    return (
+        '\n<p style="font-size:12px;color:#555">Para deixar de receber estas mensagens, '
+        f'<a href="{escape_html(url)}">cancele a subscrição</a>.</p>'
+    )
+
+
+def render(campaign: Campaign, contact: Contact, unsubscribe_url: str | None = None) -> RenderedEmail:
+    """Substitui {first_name} e {last_name}. No HTML os valores são escapados; nada é interpretado.
+
+    Com `unsubscribe_url`, acrescenta ao texto e ao HTML (se houver) a ligação para cancelar a
+    subscrição.
+    """
+    text = _fill(campaign.body_text, contact, escape=False)
+    html = _fill(campaign.body_html, contact, escape=True) if campaign.body_html else None
+    if unsubscribe_url:
+        text += _footer_text(unsubscribe_url)
+        if html is not None:
+            html += _footer_html(unsubscribe_url)
     return RenderedEmail(
-        subject=_fill(campaign.subject, contact, escape=False),
-        text=_fill(campaign.body_text, contact, escape=False),
-        html=_fill(campaign.body_html, contact, escape=True) if campaign.body_html else None,
+        subject=_fill(campaign.subject, contact, escape=False), text=text, html=html
     )

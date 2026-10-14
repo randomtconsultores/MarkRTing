@@ -5,7 +5,11 @@ from .contact import ValidationError
 
 PURPOSES = {"newsletter": "Newsletter", "promotional": "Comunicações promocionais"}
 DECISIONS = {"granted": "Concedido", "withdrawn": "Retirado"}
-SOURCES = {"form": "Formulário", "admin": "Ação administrativa"}
+SOURCES = {
+    "form": "Formulário",
+    "admin": "Ação administrativa",
+    "unsubscribe": "Cancelamento por email",
+}
 NO_RECORD = "none"
 STATUS_LABELS = {"granted": "Concedido", "withdrawn": "Retirado", NO_RECORD: "Sem registo"}
 
