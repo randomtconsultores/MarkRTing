@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Consentimento · Mini-Marketo{% endblock %}
+{% block content %}
+<p><a href="/contacts">← Contactos</a></p>
+
+<section>
+  <h2>Consentimento: {{ contact.first_name }} {{ contact.last_name }}</h2>
+  <p>Email principal: {{ contact.email }}</p>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+</section>
+
+<section>
+  <h2>Estado atual</h2>
+  <table>
+    <thead><tr><th>Finalidade</th><th>Estado</th><th>Desde (UTC)</th><th>Origem</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.label }}</td>
+        <td>{{ row.status_label }}</td>
+        <td>{{ row.latest.recorded_at.strftime('%Y-%m-%d %H:%M') if row.latest else '—' }}</td>
+        <td>{{ sources[row.latest.source] if row.latest else '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p>«Sem registo» não é consentimento: o contacto não está autorizado para essa finalidade.</p>
+</section>
+
+<section>
+  <h2>Registar decisão</h2>
+  <form method="post" action="/contacts/{{ contact.id }}/consent">
+    <label>Finalidade
+      <select name="purpose">
+        {% for key, label in purposes.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Decisão
+      <select name="decision">
+        {% for key, label in decisions.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <button>Registar</button>
+  </form>
+</section>
+
+<section>
+  <h2>Histórico ({{ history|length }})</h2>
+  <table>
+    <thead><tr><th>Data (UTC)</th><th>Finalidade</th><th>Decisão</th><th>Origem</th><th>Email</th></tr></thead>
+    <tbody>
+    {% for r in history %}
+      <tr>
+        <td>{{ r.recorded_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>{{ purposes[r.purpose] }}</td>
+        <td>{{ decisions[r.decision] }}</td>
+        <td>{{ sources[r.source] }}</td>
+        <td>{{ r.email }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5">Ainda não há decisões registadas.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
