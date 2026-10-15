@@ -34,6 +34,7 @@
 .mm-app .contact-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1.25rem; margin-bottom: 1.5rem; align-items: start; }
 .mm-app .panel { padding: 1.5rem; background: var(--surface); border: 1px solid var(--line); border-radius: 1rem; box-shadow: 0 4px 18px #172b3605; min-width: 0; }
 .mm-app .panel > .hint { margin: -.5rem 0 1rem; color: var(--muted); }
+.mm-app .panel > form + .hint { margin-top: .75rem; }
 .mm-app .contact-form label { flex: 1 1 12rem; min-width: 0; }
 .mm-app label { font-weight: 600; color: var(--ink); gap: .4rem; }
 .mm-app input, .mm-app select, .mm-app textarea { border: 1px solid #aabcc6; border-radius: .5rem; background: #fff; color: var(--ink); padding: .65rem .75rem; min-height: 2.75rem; max-width: 100%; }
@@ -50,7 +51,7 @@
 .mm-app tbody tr:last-child td { border-bottom: 0; }
 .mm-app tbody tr:hover { background: #f8fbfb; }
 .mm-app .emails li { margin-bottom: .55rem; overflow-wrap: anywhere; }
-.mm-app form.inline { align-items: center; gap: .4rem; }
+.mm-app form.inline { align-items: flex-end; gap: .4rem; }
 .mm-app form.inline button { min-height: 2.75rem; padding: .35rem .6rem; font-size: .8rem; }
 .mm-app .button-danger { background: #fff; border-color: #e5b7b7; color: #9b1c1c; }
 .mm-app .button-danger:hover { background: #fff0f0; }
