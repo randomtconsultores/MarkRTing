@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from .unsubscribe import UnsubscribeLinks
 
 # id do pedido, ponto, e 16 bytes de assinatura em base64 sem preenchimento (22 caracteres).
-_TOKEN = re.compile(r"^([0-9]{1,12})\.([A-Za-z0-9_-]{22})$")
+_TOKEN = re.compile(r"([0-9]{1,12})\.([A-Za-z0-9_-]{22})")
 
 
 def _sign(secret: str, request_id: int) -> str:
@@ -36,7 +36,8 @@ class SubscriptionLinks:
 
     def request_id_from(self, token: str) -> int | None:
         """O id do pedido se o token é autêntico; None em qualquer outro caso."""
-        match = _TOKEN.match(token or "")
+        # fullmatch: com `$`, o Python aceitaria uma quebra de linha depois da assinatura.
+        match = _TOKEN.fullmatch(token or "")
         if match is None:
             return None
         request_id = int(match.group(1))

@@ -19,9 +19,14 @@ def test_a_token_round_trips_and_the_url_points_to_the_confirmation_page():
 
 def test_tampered_or_malformed_tokens_are_rejected():
     signature = links().token_for(7).split(".")[1]
+    # A última letra tem de mudar sempre: trocar por um "A" fixo não muda nada quando a
+    # assinatura já termina em "A", e o token "adulterado" ficaria válido.
+    flipped = signature[:-1] + ("B" if signature[-1] == "A" else "A")
+    assert flipped != signature
     for token in (
         None, "", "x", "7", "7.", "7.abc", f"0.{signature}", f"8.{signature}",
-        f"7.{signature[:-1]}A", f"-7.{signature}", f"7.{signature}.extra", f" 7.{signature}",
+        f"7.{flipped}", f"-7.{signature}", f"7.{signature}.extra", f" 7.{signature}",
+        f"7.{signature}\n",
     ):
         assert links().request_id_from(token) is None, token
 
