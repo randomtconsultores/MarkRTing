@@ -1,14 +1,18 @@
 {% extends "base.html" %}
 {% block title %}{{ campaign.name }} · Mini-Marketo{% endblock %}
 {% block content %}
-<p><a href="/campaigns">← Campanhas</a></p>
-
-<section>
-  <h2>{{ campaign.name }}</h2>
-  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<div class="page-intro">
+  <p><a href="/campaigns">← Campanhas</a></p>
+  <p class="eyebrow">Comunicação</p>
+  <h1>{{ campaign.name }}</h1>
+</div>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<section class="panel page-intro" aria-labelledby="campaign-summary-title">
+  <h2 id="campaign-summary-title">Resumo da campanha</h2>
   <p>Assunto: {{ campaign.subject }}</p>
   <p>Segmento: {{ campaign.segment_name }}{% if campaign.segment_id is none %} (já não existe){% endif %} · Finalidade: {{ purposes[campaign.purpose] }} · Estado: {{ statuses[campaign.status] }}</p>
   {% if campaign.status == 'draft' %}
+  <h3>Preparar envio</h3>
   <form method="post" action="/campaigns/{{ campaign.id }}/enqueue" class="inline">
     <button>Enfileirar envio</button>
   </form>
@@ -16,22 +20,25 @@
   {% endif %}
 </section>
 
-<section>
-  <h2>Mensagens</h2>
+<section class="panel page-intro" aria-labelledby="campaign-messages-title">
+  <h2 id="campaign-messages-title">Mensagens</h2>
+  <div class="table-scroll" role="region" aria-label="Contagem de mensagens por estado" tabindex="0">
   <table>
-    <thead><tr><th>Estado</th><th>Total</th></tr></thead>
+    <thead><tr><th scope="col">Estado</th><th scope="col">Total</th></tr></thead>
     <tbody>
     {% for key, label in message_statuses.items() %}
       <tr><td>{{ label }}</td><td>{{ counts.get(key, 0) }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
 
-<section>
-  <h2>Ignoradas e falhadas ({{ problems|length }})</h2>
+<section class="panel" aria-labelledby="campaign-problems-title">
+  <h2 id="campaign-problems-title">Ignoradas e falhadas ({{ problems|length }})</h2>
+  <div class="table-scroll" role="region" aria-label="Mensagens ignoradas e falhadas" tabindex="0">
   <table>
-    <thead><tr><th>Email</th><th>Estado</th><th>Motivo</th><th>Tentativas</th></tr></thead>
+    <thead><tr><th scope="col">Email</th><th scope="col">Estado</th><th scope="col">Motivo</th><th scope="col">Tentativas</th></tr></thead>
     <tbody>
     {% for m in problems %}
       <tr>
@@ -41,10 +48,11 @@
         <td>{{ m.attempts }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="4">Nenhuma mensagem ignorada ou falhada.</td></tr>
+      <tr><td colspan="4" class="empty-state">Nenhuma mensagem ignorada ou falhada.</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
   <p class="hint">São mostradas até 50 mensagens.</p>
 </section>
 {% endblock %}

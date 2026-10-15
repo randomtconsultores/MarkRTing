@@ -1,10 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{{ segment.name }} · Mini-Marketo{% endblock %}
 {% block content %}
-<p><a href="/segments">← Segmentos</a></p>
-
-<section>
-  <h2>{{ segment.name }}</h2>
+<div class="page-intro">
+  <p><a href="/segments">← Segmentos</a></p>
+  <p class="eyebrow">A sua audiência</p>
+  <h1>{{ segment.name }}</h1>
+</div>
+<section class="panel page-intro" aria-labelledby="segment-criteria-title">
+  <h2 id="segment-criteria-title">Critérios do segmento</h2>
   {% if segment.description %}<p>{{ segment.description }}</p>{% endif %}
   <p>Entra quem cumprir <strong>{{ 'todos' if segment.match_mode == 'all' else 'qualquer um' }}</strong> dos critérios:</p>
   <ul>
@@ -15,12 +18,12 @@
   <p class="hint">Pertencer a um segmento não é autorização para comunicar: a elegibilidade verifica-se à parte, pelo consentimento concedido e não retirado da finalidade.</p>
   <p><a href="/segments/{{ segment.id }}/edit">Editar</a></p>
   <form method="post" action="/segments/{{ segment.id }}/delete" class="inline">
-    <button>Apagar segmento</button>
+    <button class="button-danger">Apagar segmento</button>
   </form>
 </section>
 
-<section>
-  <h2>Membros ({{ members.total }})</h2>
+<section class="panel" aria-labelledby="segment-members-title">
+  <h2 id="segment-members-title">Membros ({{ members.total }})</h2>
   {% if members.total %}
   <form method="get" action="/segments/{{ segment.id }}" class="inline">
     <label>Por página
@@ -30,12 +33,13 @@
         {% endfor %}
       </select>
     </label>
-    <button>Aplicar</button>
+    <button class="button-secondary">Aplicar</button>
   </form>
   <p>Mostrando {{ members.first }}–{{ members.last }} de {{ members.total }}</p>
   {% endif %}
+  <div class="table-scroll" role="region" aria-label="Membros do segmento" tabindex="0">
   <table>
-    <thead><tr><th>Nome</th><th>Emails</th><th>Empresa</th></tr></thead>
+    <thead><tr><th scope="col">Nome</th><th scope="col">Emails</th><th scope="col">Empresa</th></tr></thead>
     <tbody>
     {% for m in members.items %}
       <tr>
@@ -44,12 +48,13 @@
         <td>{{ m.company_name or '—' }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="3">Nenhum contacto cumpre estes critérios.</td></tr>
+      <tr><td colspan="3" class="empty-state">Nenhum contacto cumpre estes critérios.</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
   {% if members.pages > 1 %}
-  <nav class="pager">
+  <nav class="pager" aria-label="Paginação dos membros">
     {% if members.has_previous %}<a rel="prev" href="/segments/{{ segment.id }}?per_page={{ members.per_page }}&amp;page={{ members.page - 1 }}">← anterior</a>{% endif %}
     <span>Página {{ members.page }} de {{ members.pages }}</span>
     {% if members.has_next %}<a rel="next" href="/segments/{{ segment.id }}?per_page={{ members.per_page }}&amp;page={{ members.page + 1 }}">seguinte →</a>{% endif %}
