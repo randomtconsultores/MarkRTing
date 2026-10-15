@@ -89,6 +89,38 @@ CREATE TABLE suppressions (
 CREATE UNIQUE INDEX ux_suppressions_email ON suppressions (email);
 """
 
+# Pedidos de subscrição pública, antes de confirmados (double opt-in). Ainda não há contacto nem
+# consentimento: só ao confirmar. `delivery_status` e as colunas seguintes seguem a caixa de saída
+# das campanhas, para o email de confirmação sair pelo mesmo processo de envio. Só cria objetos
+# novos; não toca nos dados.
+SUBSCRIPTIONS_V8 = """
+CREATE TABLE subscription_requests (
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email           TEXT NOT NULL CHECK (length(email) > 0 AND email = lower(trim(email))),
+    first_name      TEXT NOT NULL CHECK (length(trim(first_name)) > 0),
+    last_name       TEXT NOT NULL CHECK (length(trim(last_name)) > 0),
+    lang            TEXT NOT NULL CHECK (length(lang) BETWEEN 2 AND 8),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    delivery_status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (delivery_status IN ('pending', 'sending', 'sent', 'failed', 'skipped')),
+    attempts        INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    claimed_at      TIMESTAMPTZ,
+    last_error      TEXT NOT NULL DEFAULT '',
+    skip_reason     TEXT NOT NULL DEFAULT '',
+    sent_at         TIMESTAMPTZ,
+    confirmed_at    TIMESTAMPTZ
+);
+CREATE INDEX ix_subscription_requests_email ON subscription_requests (email, created_at);
+CREATE INDEX ix_subscription_requests_due ON subscription_requests (delivery_status, next_attempt_at);
+
+CREATE TABLE subscription_request_purposes (
+    request_id INTEGER NOT NULL REFERENCES subscription_requests (id) ON DELETE CASCADE,
+    purpose    TEXT NOT NULL CHECK (purpose IN ('newsletter', 'promotional')),
+    PRIMARY KEY (request_id, purpose)
+);
+"""
+
 # Esquema criado de raiz na versão-base; as versões seguintes entram em MIGRATIONS (SQL do PostgreSQL).
 MIGRATIONS: list[Migration] = [
     (3, SEGMENTS_V3),
@@ -96,6 +128,7 @@ MIGRATIONS: list[Migration] = [
     (5, CAMPAIGNS_V5),
     (6, CONSENT_SOURCE_V6),
     (7, SUPPRESSIONS_V7),
+    (8, SUBSCRIPTIONS_V8),
 ]
 SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 

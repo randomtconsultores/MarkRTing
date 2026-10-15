@@ -13,6 +13,14 @@ from mini_marketo.repositories.segment_repository import SegmentRepository
 from mini_marketo.services.contact_service import ContactService
 from mini_marketo.services.segment_service import SegmentService
 
+# Tabelas das migrações mais recentes, por versão (as filhas primeiro). Recuar a versão de um
+# esquema de teste tem de as apagar: se ficassem, a reabertura voltava a criá-las e falhava com
+# «already exists». Só entram aqui tabelas que nenhuma migração anterior referencia.
+LATER_TABLES = {
+    7: ["suppressions"],
+    8: ["subscription_request_purposes", "subscription_requests"],
+}
+
 
 @pytest.fixture
 def pg_url():
@@ -92,6 +100,12 @@ class Db:
         return self.scalar("SELECT max(version) FROM schema_version")
 
     def set_version(self, number):
+        """Finge um esquema na versão `number`: apaga também as tabelas das migrações seguintes
+        (ver LATER_TABLES). As tabelas mais antigas, que outras referenciam, apaga-as o teste."""
+        for version in sorted(LATER_TABLES):
+            if version > int(number):
+                for table in LATER_TABLES[version]:
+                    self.execute(f"DROP TABLE IF EXISTS {table}")
         if self.kind == "sqlite":
             self.execute(f"PRAGMA user_version = {int(number)}")
         else:

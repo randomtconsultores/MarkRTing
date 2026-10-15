@@ -16,7 +16,7 @@ postgres = ["psycopg[binary]>=3.2"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-mini_marketo = ["templates/*.html", "static/*.css"]
+mini_marketo = ["templates/*.html", "static/*.css", "texts/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
