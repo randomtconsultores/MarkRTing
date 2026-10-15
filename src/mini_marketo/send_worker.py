@@ -8,7 +8,7 @@ queixas e supressões manuais) não recebem nada.
 
 Em cada ronda envia primeiro os emails de confirmação de subscrição (com um teto diário próprio,
 MINI_MARKETO_CONFIRMATION_DAILY_CAP, e a ligação opcional MINI_MARKETO_PRIVACY_URL) e depois as
-campanhas.
+campanhas. Throttling ou falhas consecutivas nas confirmações interrompem a ronda inteira.
 """
 
 import argparse
@@ -90,6 +90,8 @@ def main(argv=None) -> int:
         "--poll-seconds", type=float, default=30.0, help="pausa entre rondas com --loop"
     )
     args = parser.parse_args(argv)
+    if args.poll_seconds <= 0:
+        parser.error("--poll-seconds tem de ser positivo")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         config = SmtpConfig.from_env()
@@ -127,6 +129,14 @@ def main(argv=None) -> int:
             if confirmations.stopped.startswith("erro_fatal"):
                 log.error("Envio parado: %s", confirmations.stopped)
                 return 2
+            if confirmations.stopped and confirmations.stopped != "limite_diario":
+                # Mesmo SMTP: não contornar uma paragem de segurança passando às campanhas.
+                log.warning("Ronda interrompida antes das campanhas: %s", confirmations.stopped)
+                if not args.loop:
+                    return 0
+                # A próxima ronda aguarda pelo menos o recuo inicial do envio.
+                time.sleep(max(args.poll_seconds, limits.base_backoff_seconds))
+                continue
             summary = worker.run_once()
             log.info(
                 "enviadas=%d falhadas=%d repetidas=%d ignoradas=%d suprimidas=%d paragem=%s",
