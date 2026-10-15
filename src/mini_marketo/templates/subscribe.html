@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{{ t('form.title') }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <h1>{{ t('form.title') }}</h1>
+    <p>{{ t('form.intro') }}</p>
+    {% if error %}<p class="error" role="alert">{{ t('form.error') }}</p>{% endif %}
+    <form method="post" action="/subscribe">
+      <input type="hidden" name="lang" value="{{ lang }}">
+      <label>{{ t('form.first_name') }}
+        <input name="first_name" value="{{ form.first_name }}" maxlength="100" required autocomplete="given-name">
+      </label>
+      <label>{{ t('form.last_name') }}
+        <input name="last_name" value="{{ form.last_name }}" maxlength="100" required autocomplete="family-name">
+      </label>
+      <label>{{ t('form.email') }}
+        <input type="email" name="email" value="{{ form.email }}" maxlength="254" required autocomplete="email">
+      </label>
+      <fieldset>
+        <legend>{{ t('form.purposes') }}</legend>
+        <p>{{ t('form.purposes_hint') }}</p>
+        {% for key in purposes %}
+        <label><input type="checkbox" name="purposes" value="{{ key }}"{% if key in form.purposes %} checked{% endif %}> {{ t('purpose.' ~ key) }}</label>
+        {% endfor %}
+      </fieldset>
+      <div style="position:absolute;left:-10000px" aria-hidden="true">
+        <label>{{ t('form.honeypot') }} <input name="website" tabindex="-1" autocomplete="off"></label>
+      </div>
+      <button>{{ t('form.submit') }}</button>
+    </form>
+    {% if privacy_url %}<p><a href="{{ privacy_url }}">{{ t('form.privacy') }}</a></p>{% endif %}
+  </main>
+</body>
+</html>
