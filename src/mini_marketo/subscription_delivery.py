@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from . import texts
 from .delivery import DeliveryLimits, RunSummary, backoff_seconds
 from .domain.campaign import SKIP_SUPPRESSED, utc_now
-from .domain.subscription import CONFIRMATION_TTL
+from .domain.subscription import CONFIRMATION_TTL, is_expired
 from .mailer import ConfigError, SendError, classify
 
 DEFAULT_CONFIRMATION_CAP = 200
@@ -145,6 +145,11 @@ class ConfirmationSender:
             hours=int(CONFIRMATION_TTL.total_seconds() // 3600),
             url=self.links.url_for(request.id), privacy=privacy,
         )
+        # O prazo pode terminar depois de selecionar o lote, durante a reclamação ou enquanto
+        # se prepara o texto. Volta a verificá-lo mesmo antes de chamar o SMTP.
+        if is_expired(request.created_at, self.now()):
+            self.requests.mark_skipped(request.id, "expirado")
+            return "skipped", "expirado"
         try:
             self.mailer.send(request.email, subject, body)
         except Exception as exc:
