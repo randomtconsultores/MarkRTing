@@ -6,6 +6,7 @@ from contextlib import AbstractContextManager, contextmanager
 from itertools import zip_longest
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -13,12 +14,14 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from . import texts
 from .database import connect as sqlite_connect
 from .database import init_db as sqlite_init_db
 from .domain.campaign import CAMPAIGN_STATUSES, MESSAGE_STATUSES, SKIP_REASONS
 from .domain.consent import PURPOSES, ContactNotFoundError
 from .domain.contact import ValidationError
 from .domain.segment import CONSENT_FIELD_PREFIX, Criterion, Segment
+from .domain.subscription import CONFIRMATION_TTL, DEFAULT_LANG
 from .domain.suppression import REASONS as SUPPRESSION_REASONS
 from .domain.suppression import REMOVABLE_REASONS
 from .domain.suppression import SOURCES as SUPPRESSION_SOURCES
@@ -31,11 +34,15 @@ from .repositories.contact_repository import ContactRepository
 from .repositories.segment_repository import SegmentRepository
 from .repositories.suppression_repository import SuppressionRepository
 from .services.campaign_service import CampaignService
+from .services.confirmation_service import ConfirmationService
 from .services.consent_service import ConsentService
 from .services.contact_service import ContactService
 from .services.segment_service import SegmentService
+from .services.subscription_service import SubscriptionService
 from .services.suppression_service import SuppressionService
 from .services.unsubscribe_service import UnsubscribeService
+from .subscription_delivery import load_privacy_url
+from .subscription_links import SubscriptionLinks
 from .unsubscribe import UnsubscribeLinks
 
 BASE = Path(__file__).parent
@@ -47,6 +54,8 @@ ConsentFactory = Callable[[], AbstractContextManager[ConsentService]]
 CampaignFactory = Callable[[], AbstractContextManager[CampaignService]]
 UnsubscribeFactory = Callable[[], AbstractContextManager[UnsubscribeService]]
 SuppressionFactory = Callable[[], AbstractContextManager[SuppressionService]]
+SubscriptionFactory = Callable[[], AbstractContextManager[SubscriptionService]]
+ConfirmationFactory = Callable[[], AbstractContextManager[ConfirmationService | None]]
 
 EVENTS_TOKEN_MIN_LENGTH = 32
 MAX_EVENT_BYTES = 8192
@@ -109,6 +118,11 @@ def segment_form(segment: Segment) -> dict:
         "match_mode": segment.match_mode,
         "rows": pad_rows(rows),
     }
+
+
+def subscription_lang(value: str | None) -> str:
+    """O idioma pedido, se existir no catálogo de textos; senão, o idioma por omissão."""
+    return value if value in texts.available_languages() else DEFAULT_LANG
 
 
 def build_service_factory(db_path: str | Path, database_url: str | None = None) -> ServiceFactory:
@@ -301,6 +315,105 @@ def build_suppression_service_factory(
     return open_suppressions
 
 
+def build_subscription_service_factory(
+    db_path: str | Path, database_url: str | None = None
+) -> SubscriptionFactory:
+    """Sem criar/migrar o esquema (já feito por build_service_factory)."""
+    languages = texts.available_languages()
+    if database_url:
+        from .postgres_database import connect
+        from .repositories.postgres_subscription_repository import PostgresSubscriptionRepository
+        from .repositories.postgres_suppression_repository import PostgresSuppressionRepository
+
+        @contextmanager
+        def open_subscriptions():
+            conn = connect(database_url)
+            try:
+                yield SubscriptionService(
+                    PostgresSubscriptionRepository(conn),
+                    SuppressionService(PostgresSuppressionRepository(conn)),
+                    languages,
+                )
+            finally:
+                conn.close()
+
+        return open_subscriptions
+
+    from .repositories.subscription_repository import SubscriptionRepository
+
+    @contextmanager
+    def open_subscriptions():
+        conn = sqlite_connect(db_path)
+        try:
+            yield SubscriptionService(
+                SubscriptionRepository(conn),
+                SuppressionService(SuppressionRepository(conn)),
+                languages,
+            )
+        finally:
+            conn.close()
+
+    return open_subscriptions
+
+
+def build_confirmation_service_factory(
+    db_path: str | Path, database_url: str | None = None
+) -> ConfirmationFactory:
+    """Sem criar/migrar o esquema. Sem URL público e chave não há ligações válidas: devolve None
+    e nenhuma confirmação é aceite (como o cancelamento)."""
+    base = load_unsubscribe_links()
+    if base is None:
+
+        @contextmanager
+        def open_nothing():
+            yield None
+
+        return open_nothing
+    links = SubscriptionLinks(base)
+    if database_url:
+        from .postgres_database import connect
+        from .repositories.postgres_consent_repository import PostgresConsentRepository
+        from .repositories.postgres_contact_repository import PostgresContactRepository
+        from .repositories.postgres_subscription_repository import PostgresSubscriptionRepository
+        from .repositories.postgres_suppression_repository import PostgresSuppressionRepository
+
+        @contextmanager
+        def open_confirmation():
+            conn = connect(database_url)
+            try:
+                contacts = PostgresContactRepository(conn)
+                yield ConfirmationService(
+                    PostgresSubscriptionRepository(conn),
+                    SuppressionService(PostgresSuppressionRepository(conn)),
+                    ContactService(contacts),
+                    ConsentService(PostgresConsentRepository(conn), contacts),
+                    links,
+                )
+            finally:
+                conn.close()
+
+        return open_confirmation
+
+    from .repositories.subscription_repository import SubscriptionRepository
+
+    @contextmanager
+    def open_confirmation():
+        conn = sqlite_connect(db_path)
+        try:
+            contacts = ContactRepository(conn)
+            yield ConfirmationService(
+                SubscriptionRepository(conn),
+                SuppressionService(SuppressionRepository(conn)),
+                ContactService(contacts),
+                ConsentService(ConsentRepository(conn), contacts),
+                links,
+            )
+        finally:
+            conn.close()
+
+    return open_confirmation
+
+
 def load_unsubscribe_links() -> UnsubscribeLinks | None:
     """None se o URL público ou a chave não estão configurados: nenhuma ligação é aceite."""
     try:
@@ -378,9 +491,18 @@ def create_app(
     unsubscribe_service: UnsubscribeService | None = None,
     suppression_service: SuppressionService | None = None,
     events_token: str | None = None,
+    subscription_service: SubscriptionService | None = None,
+    confirmation_service: ConfirmationService | None = None,
+    privacy_url: str | None = None,
 ) -> FastAPI:
     # Sem token explícito lê-se o ambiente; "" desativa o endpoint (útil nos testes).
     token = check_events_token(events_token) if events_token is not None else load_events_token()
+    # Idem para a ligação da política de privacidade; "" não mostra nenhuma.
+    privacy = (
+        load_privacy_url()
+        if privacy_url is None
+        else load_privacy_url({"MINI_MARKETO_PRIVACY_URL": privacy_url})
+    )
     if service is not None:
         # Serviços injetados (testes): partilhados, não são abertos nem fechados por pedido.
         @contextmanager
@@ -416,6 +538,18 @@ def create_app(
             if suppression_service is None:
                 raise RuntimeError("create_app: suppression_service não foi injetado.")
             yield suppression_service
+
+        @contextmanager
+        def open_subscriptions():
+            if subscription_service is None:
+                raise RuntimeError("create_app: subscription_service não foi injetado.")
+            yield subscription_service
+
+        @contextmanager
+        def open_confirmation():
+            if confirmation_service is None:
+                raise RuntimeError("create_app: confirmation_service não foi injetado.")
+            yield confirmation_service
     else:
         open_service = build_service_factory(db_path, database_url)
         open_segments = build_segment_service_factory(db_path, database_url)
@@ -423,6 +557,8 @@ def create_app(
         open_campaigns = build_campaign_service_factory(db_path, database_url)
         open_unsubscribe = build_unsubscribe_service_factory(db_path, database_url)
         open_suppressions = build_suppression_service_factory(db_path, database_url)
+        open_subscriptions = build_subscription_service_factory(db_path, database_url)
+        open_confirmation = build_confirmation_service_factory(db_path, database_url)
 
     templates = Jinja2Templates(directory=str(BASE / "templates"))
 
@@ -453,12 +589,23 @@ def create_app(
         with open_suppressions() as svc:
             yield svc
 
+    def get_subscriptions() -> Iterator[SubscriptionService]:
+        with open_subscriptions() as svc:
+            yield svc
+
+    def get_confirmation() -> Iterator[ConfirmationService | None]:
+        with open_confirmation() as svc:
+            yield svc
+
     Svc = Annotated[ContactService, Depends(get_service)]
     Seg = Annotated[SegmentService, Depends(get_segments)]
     Cons = Annotated[ConsentService, Depends(get_consents)]
     Camp = Annotated[CampaignService, Depends(get_campaigns)]
     Unsub = Annotated[UnsubscribeService, Depends(get_unsubscribe)]
     Supp = Annotated[SuppressionService, Depends(get_suppressions)]
+    Subs = Annotated[SubscriptionService, Depends(get_subscriptions)]
+    # Pode ser None (sem URL público e chave): as rotas tratam-no como ligação inválida.
+    Conf = Annotated[ConfirmationService, Depends(get_confirmation)]
 
     def page(request: Request, service: ContactService, error=None, form=None, status=200):
         return templates.TemplateResponse(
@@ -542,6 +689,56 @@ def create_app(
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    def public_response(request: Request, template: str, lang: str, context: dict, status=200):
+        """Páginas públicas da subscrição: autónomas, sem o menu de administração, com os
+        textos do catálogo no idioma `lang`. Algumas têm o token no URL: nem cache nem Referer."""
+        context = {
+            **context, "lang": lang,
+            "t": lambda key, **params: texts.text(lang, key, **params),
+        }
+        response = templates.TemplateResponse(request, template, context, status_code=status)
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def subscribe_page(request: Request, lang: str, error=False, form=None, status=200):
+        return public_response(
+            request, "subscribe.html", lang,
+            {"purposes": list(PURPOSES), "privacy_url": privacy, "error": error,
+             "form": form or {"first_name": "", "last_name": "", "email": "", "purposes": []}},
+            status,
+        )
+
+    def notice_page(request: Request, lang: str, title: str, body: str, status=200,
+                    action: str = "", button: str = ""):
+        return public_response(
+            request, "subscribe_notice.html", lang,
+            {"title": title, "body": body, "action": action, "button": button},
+            status,
+        )
+
+    def confirmation_page(request: Request, view, token: str, done: bool):
+        if view is None:
+            # Token inválido, pedido inexistente, expirado, suprimido ou ligações por configurar:
+            # a mesma resposta, para não dizer o que falhou.
+            return notice_page(
+                request, DEFAULT_LANG,
+                texts.text(DEFAULT_LANG, "invalid.title"),
+                texts.text(DEFAULT_LANG, "invalid.body"), 404,
+            )
+        lang = subscription_lang(view.request.lang)
+        purposes = ", ".join(texts.text(lang, f"purpose.{p}") for p in view.request.purposes)
+        if done or view.confirmed:
+            return notice_page(
+                request, lang, texts.text(lang, "confirmed.title"),
+                texts.text(lang, "confirmed.body", purposes=purposes),
+            )
+        return notice_page(
+            request, lang, texts.text(lang, "confirm.title"),
+            texts.text(lang, "confirm.body", purposes=purposes),
+            action=f"/subscribe/confirm/{token}", button=texts.text(lang, "confirm.button"),
+        )
 
     def load_segment(segments: SegmentService, segment_id: int) -> Segment:
         try:
@@ -799,6 +996,58 @@ def create_app(
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return JSONResponse({"status": outcome})
+
+    @app.get("/subscribe")
+    def subscribe_form(request: Request, lang: str = Query("")):
+        return subscribe_page(request, subscription_lang(lang))
+
+    @app.post("/subscribe")
+    def subscribe_submit(
+        request: Request,
+        subscriptions: Subs,
+        first_name: str = Form(""),
+        last_name: str = Form(""),
+        email: str = Form(""),
+        purposes: list[str] = Form([]),
+        lang: str = Form(""),
+        website: str = Form(""),
+    ):
+        # Endereço público. Todos os pedidos válidos têm a mesma resposta (gravados, suprimidos,
+        # limitados, de robôs ou de endereços já conhecidos), para não revelar nada sobre um
+        # endereço. Só um formulário inválido dá erro, e esse erro só fala do que a pessoa escreveu.
+        lang = subscription_lang(lang)
+        received = "/subscribe/received" + (
+            "" if lang == DEFAULT_LANG else "?" + urlencode({"lang": lang})
+        )
+        if website.strip():  # campo-armadilha: só um robô o preenche
+            return RedirectResponse(received, status_code=303)
+        try:
+            subscriptions.request(email, first_name, last_name, purposes, lang)
+        except ValidationError:
+            form = {"first_name": first_name, "last_name": last_name, "email": email,
+                    "purposes": purposes}
+            return subscribe_page(request, lang, error=True, form=form, status=422)
+        return RedirectResponse(received, status_code=303)
+
+    @app.get("/subscribe/received")
+    def subscribe_received(request: Request, lang: str = Query("")):
+        lang = subscription_lang(lang)
+        hours = int(CONFIRMATION_TTL.total_seconds() // 3600)
+        return notice_page(
+            request, lang, texts.text(lang, "received.title"),
+            texts.text(lang, "received.body", hours=hours),
+        )
+
+    @app.get("/subscribe/confirm/{token}")
+    def subscribe_confirm_page(request: Request, confirmation: Conf, token: str):
+        # Só mostra a confirmação: quem faz GET (verificadores de ligações) não confirma ninguém.
+        view = confirmation.preview(token) if confirmation is not None else None
+        return confirmation_page(request, view, token, done=False)
+
+    @app.post("/subscribe/confirm/{token}")
+    def subscribe_confirm_now(request: Request, confirmation: Conf, token: str):
+        view = confirmation.confirm(token) if confirmation is not None else None
+        return confirmation_page(request, view, token, done=True)
 
     @app.get("/unsubscribe/{token}")
     def unsubscribe_confirm_page(request: Request, unsub: Unsub, token: str):

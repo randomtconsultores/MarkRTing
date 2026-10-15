@@ -54,6 +54,11 @@ class ContactService:
         self.repo.remove_email(contact_id, email)
         return self.repo.get_contact(contact_id)
 
+    def find_by_email(self, email: str) -> Contact | None:
+        """O contacto que tem este email (principal ou não), ou None."""
+        email = normalize_email(email)
+        return self.repo.get_contact_by_email(email) if email else None
+
     def list_contacts(self) -> list[Contact]:
         return self.repo.list_contacts()
 
