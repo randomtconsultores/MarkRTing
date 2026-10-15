@@ -5,12 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Mini-Marketo{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/identity.css">
 </head>
-<body>
-  <header>
-    <strong>Mini-Marketo</strong>
-    <nav><a href="/contacts">Contactos</a> <a href="/segments">Segmentos</a> <a href="/campaigns">Campanhas</a> <a href="/suppressions">Supressões</a></nav>
+<body class="mm-app">
+  <a class="skip-link" href="#main-content">Saltar para o conteúdo</a>
+  <header class="app-header">
+    <a class="brand" href="/contacts"><span class="brand-mark" aria-hidden="true">m<span>•</span></span><strong>Mini-Marketo</strong></a>
+    <nav aria-label="Navegação principal">
+      {% for url, label in [('/contacts', 'Contactos'), ('/segments', 'Segmentos'), ('/campaigns', 'Campanhas'), ('/suppressions', 'Supressões')] %}
+      {% set active = request.url.path == url or request.url.path.startswith(url ~ '/') %}
+      <a href="{{ url }}"{% if active %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
   </header>
-  <main>{% block content %}{% endblock %}</main>
+  <main id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>
 </body>
 </html>
