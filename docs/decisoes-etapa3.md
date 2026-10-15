@@ -1,6 +1,6 @@
 # Decisões de arquitetura - Etapa 3
 
-Estado: em curso. A etapa 3 divide-se em quatro PRs, pela ordem **1, 2, 4, 3**: (1) campanhas e envio (integrado), (2) cancelar subscrição (integrado), (4) lista de supressão e bounces (em validação), (3) subscrição pública com confirmação por email (double opt-in).
+Estado: em curso. A etapa 3 divide-se em quatro PRs, pela ordem **1, 2, 4, 3**: (1) campanhas e envio (integrado), (2) cancelar subscrição (integrado), (4) lista de supressão e bounces (validado, a integrar), (3) subscrição pública com confirmação por email (double opt-in).
 
 **Não se envia nenhuma campanha real antes de o PR 4 estar integrado.** Sem tratamento de bounces e queixas, envios em volume prejudicam a reputação e, acima de 5000 mensagens por dia, ficam fora das regras dos grandes fornecedores de caixas de correio.
 
@@ -125,7 +125,7 @@ Requisito: um endereço que devolveu um bounce permanente, que se queixou de spa
 - Eventos externos: `POST /events/email` com um formato próprio, `{"type": "bounce", "email": "...", "permanent": true, "detail": "..."}` ou `{"type": "complaint", "email": "..."}`. Só um bounce permanente e uma queixa suprimem; um bounce temporário é ignorado (resposta 200, `ignored`). Em bounces, `permanent` é obrigatório e booleano: se faltasse, o evento teria de ser suprimido ou ignorado às cegas. Tudo é validado antes de qualquer escrita. Alternativa rejeitada: aceitar já o formato de um fornecedor (por exemplo as notificações do SES): não há ainda fornecedor escolhido, e um adaptador pequeno traduz o formato dele para este quando houver.
 - Autenticação do endpoint: `Authorization: Bearer <token>`, comparado em tempo constante com `MINI_MARKETO_EVENTS_TOKEN` (mínimo 32 caracteres). Sem token configurado, o endpoint não existe (404): não há um endpoint de escrita aberto por omissão. Um token curto é um erro de arranque, em vez de desativar em silêncio. Token em falta ou errado dá 401 com `WWW-Authenticate: Bearer`, e a ligação à base de dados só abre depois de autenticar. Corpo limitado a 8 KB (413). Sem sessão nem cookies, por isso não há CSRF a tratar.
 - As páginas de administração (`/suppressions`) não têm autenticação, como as restantes: ver o aviso de operação acima. O motivo e a origem de uma supressão manual são fixados no servidor.
-- Migração v7: uma tabela e um índice únicos; a coluna `skip_reason` das mensagens não tem restrição, por isso o novo motivo `suprimido` não obriga a reconstruir tabelas.
+- Migração v7: uma tabela e um índice únicos; a coluna `skip_reason` das mensagens não tem restrição, por isso o novo motivo `suprimido` não obriga a reconstruir tabelas. Não tem `IF NOT EXISTS`, como as anteriores: se a tabela já existir com outra forma, a migração tem de falhar em vez de esconder uma base inconsistente.
 
 **Exemplo de chamada** (o token vem do ambiente; nunca o escrever em scripts guardados):
 
@@ -148,6 +148,7 @@ curl -X POST https://marketing.exemplo.pt/events/email \
 
 **Validação**
 
-- Ainda por validar: suíte completa com SQLite e PostgreSQL ativos, CI e revisão no ramo `feat/etapa3-supressao`.
+- Suíte completa com SQLite e PostgreSQL ativos no ramo `feat/etapa3-supressao`: 824 aprovados em 56,74 s (antes do PR: 689). A primeira execução teve 818 aprovados e 6 falhas, todas erro dos próprios testes: três testes de migração antigos (v4, v5 e v6, nos dois backends) recuam a versão do esquema apagando tabelas, mas deixavam a tabela `suppressions` da v7, e a reabertura voltava a criá-la («already exists»). Código de produção inalterado; os testes passaram a apagar também essa tabela.
 - Verificado à parte, em SQLite isolado: o SQL de gravação idempotente e as restrições da tabela.
+- Nenhum teste envia email a sério e não foi enviado nenhum email real a partir desta aplicação.
 - Não verificado: o envio contra um servidor SMTP real, os códigos 5.1.x reais de servidores de correio, o endpoint atrás de um proxy real, as páginas no browser e a migração v7 sobre uma cópia da base de dados real.
