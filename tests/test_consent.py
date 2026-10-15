@@ -104,9 +104,11 @@ def test_base_de_dados_rejeita_valores_invalidos(ctx):
 
 def test_migracao_v4_preserva_dados(ctx):
     db, consents, c = ctx
-    # Desfaz também a v5 (campanhas), que depende de contactos e segmentos mas não da v4.
+    # Desfaz também a v5 (campanhas), que depende de contactos e segmentos mas não da v4,
+    # e a v7 (supressões), que não depende de nada mas tem de voltar a ser criada.
     db.execute("DROP TABLE email_messages")
     db.execute("DROP TABLE campaigns")
+    db.execute("DROP TABLE suppressions")
     db.execute("DROP TABLE consent_events")
     db.set_version(3)
     again = db.reopen()
