@@ -1,14 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Contactos · Mini-Marketo{% endblock %}
 {% block content %}
+<div class="page-intro">
+  <p class="eyebrow">A sua audiência</p>
+  <h1>Contactos</h1>
+  <p>Organize as pessoas e as empresas com quem comunica. Consulte o consentimento de cada contacto antes de preparar uma campanha.</p>
+</div>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 
-<section>
-  <h2>Novo contacto</h2>
-  <form method="post" action="/contacts">
-    <label>Nome <input name="first_name" value="{{ form.first_name or '' }}" required></label>
-    <label>Apelido <input name="last_name" value="{{ form.last_name or '' }}" required></label>
-    <label>Email <input type="email" name="email" value="{{ form.email or '' }}" required></label>
+<div class="contact-grid">
+<section class="panel" aria-labelledby="new-contact-title">
+  <h2 id="new-contact-title">Novo contacto</h2>
+  <form method="post" action="/contacts" class="contact-form">
+    <label>Nome <input name="first_name" value="{{ form.first_name or '' }}" required autocomplete="given-name"></label>
+    <label>Apelido <input name="last_name" value="{{ form.last_name or '' }}" required autocomplete="family-name"></label>
+    <label>Email <input type="email" name="email" value="{{ form.email or '' }}" required autocomplete="email"></label>
     <label>Empresa
       <select name="company_id">
         <option value="">— nenhuma —</option>
@@ -21,23 +27,26 @@
   </form>
 </section>
 
-<section>
-  <h2>Nova empresa</h2>
-  <form method="post" action="/companies">
+<section class="panel" aria-labelledby="new-company-title">
+  <h2 id="new-company-title">Nova empresa</h2>
+  <p class="hint">Crie uma empresa para a associar aos seus contactos.</p>
+  <form method="post" action="/companies" class="contact-form">
     <label>Nome <input name="name" required></label>
     <label>Website <input name="website"></label>
-    <button>Guardar</button>
+    <button class="button-secondary">Guardar</button>
   </form>
 </section>
+</div>
 
-<section>
-  <h2>Contactos ({{ contacts|length }})</h2>
+<section class="panel" aria-labelledby="contact-list-title">
+  <h2 id="contact-list-title">Contactos ({{ contacts|length }})</h2>
+  <div class="table-scroll" role="region" aria-label="Lista de contactos" tabindex="0">
   <table>
-    <thead><tr><th>Nome</th><th>Emails</th><th>Empresa</th><th>Criado em (UTC)</th></tr></thead>
+    <thead><tr><th scope="col">Nome</th><th scope="col">Emails</th><th scope="col">Empresa</th><th scope="col">Criado em (UTC)</th></tr></thead>
     <tbody>
     {% for c in contacts %}
       <tr>
-        <td>{{ c.first_name }} {{ c.last_name }}<br><a href="/contacts/{{ c.id }}/consent">Consentimento</a></td>
+        <td><strong>{{ c.first_name }} {{ c.last_name }}</strong><br><a href="/contacts/{{ c.id }}/consent">Consentimento</a></td>
         <td>
           <ul class="emails">
           {% for e in c.emails %}
@@ -45,26 +54,27 @@
             {% if loop.first %}<span class="badge">principal</span>
             {% else %}
               <form method="post" action="/contacts/{{ c.id }}/emails/primary" class="inline">
-                <input type="hidden" name="email" value="{{ e }}"><button>tornar principal</button>
+                <input type="hidden" name="email" value="{{ e }}"><button class="button-secondary">tornar principal</button>
               </form>
               <form method="post" action="/contacts/{{ c.id }}/emails/remove" class="inline">
-                <input type="hidden" name="email" value="{{ e }}"><button>remover</button>
+                <input type="hidden" name="email" value="{{ e }}"><button class="button-danger">remover</button>
               </form>
             {% endif %}
             </li>
           {% endfor %}
           </ul>
           <form method="post" action="/contacts/{{ c.id }}/emails" class="inline">
-            <input type="email" name="email" placeholder="novo email" required><button>Adicionar</button>
+            <input type="email" name="email" placeholder="novo email" aria-label="Novo email de {{ c.first_name }} {{ c.last_name }}" required><button class="button-secondary">Adicionar</button>
           </form>
         </td>
         <td>{{ c.company_name or '—' }}</td>
         <td>{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="4">Ainda não há contactos.</td></tr>
+      <tr><td colspan="4" class="empty-state"><strong>Ainda não há contactos.</strong><p>Comece pelo formulário acima para adicionar o primeiro.</p></td></tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
 {% endblock %}
