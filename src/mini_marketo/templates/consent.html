@@ -1,18 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Consentimento · Mini-Marketo{% endblock %}
 {% block content %}
-<p><a href="/contacts">← Contactos</a></p>
+<div class="page-intro">
+  <p><a href="/contacts">← Contactos</a></p>
+  <p class="eyebrow">Preferências de comunicação</p>
+  <h1>Consentimento</h1>
+  <p><strong>{{ contact.first_name }} {{ contact.last_name }}</strong><br>Email principal: {{ contact.email }}</p>
+</div>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 
-<section>
-  <h2>Consentimento: {{ contact.first_name }} {{ contact.last_name }}</h2>
-  <p>Email principal: {{ contact.email }}</p>
-  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-</section>
-
-<section>
-  <h2>Estado atual</h2>
+<div class="contact-grid">
+<section class="panel" aria-labelledby="consent-state-title">
+  <h2 id="consent-state-title">Estado atual</h2>
+  <div class="table-scroll" role="region" aria-label="Estado atual do consentimento" tabindex="0">
   <table>
-    <thead><tr><th>Finalidade</th><th>Estado</th><th>Última decisão (UTC)</th><th>Origem</th></tr></thead>
+    <thead><tr><th scope="col">Finalidade</th><th scope="col">Estado</th><th scope="col">Última decisão (UTC)</th><th scope="col">Origem</th></tr></thead>
     <tbody>
     {% for row in rows %}
       <tr>
@@ -24,14 +26,15 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
   {% if rows|selectattr('status', 'equalto', 'none')|list %}
   <p>«Sem registo» não é consentimento: o contacto não está autorizado para essa finalidade.</p>
   {% endif %}
 </section>
 
-<section>
-  <h2>Registar decisão</h2>
-  <form method="post" action="/contacts/{{ contact.id }}/consent">
+<section class="panel" aria-labelledby="consent-decision-title">
+  <h2 id="consent-decision-title">Registar decisão</h2>
+  <form method="post" action="/contacts/{{ contact.id }}/consent" class="contact-form">
     <label>Finalidade
       <select name="purpose">
         {% for key, label in purposes.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
@@ -45,11 +48,13 @@
     <button>Registar</button>
   </form>
 </section>
+</div>
 
-<section>
-  <h2>Histórico ({{ history|length }})</h2>
+<section class="panel" aria-labelledby="consent-history-title">
+  <h2 id="consent-history-title">Histórico ({{ history|length }})</h2>
+  <div class="table-scroll" role="region" aria-label="Histórico de decisões de consentimento" tabindex="0">
   <table>
-    <thead><tr><th>Data (UTC)</th><th>Finalidade</th><th>Decisão</th><th>Origem</th><th>Email</th></tr></thead>
+    <thead><tr><th scope="col">Data (UTC)</th><th scope="col">Finalidade</th><th scope="col">Decisão</th><th scope="col">Origem</th><th scope="col">Email</th></tr></thead>
     <tbody>
     {% for r in history %}
       <tr>
@@ -60,9 +65,10 @@
         <td>{{ r.email }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="5">Ainda não há decisões registadas.</td></tr>
+      <tr><td colspan="5" class="empty-state">Ainda não há decisões registadas.</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
 {% endblock %}
