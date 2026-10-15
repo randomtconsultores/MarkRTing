@@ -48,6 +48,13 @@ class PostgresContactRepository:
             "SELECT 1 FROM contact_emails WHERE email = %s", (email,)
         ).fetchone() is not None
 
+    def get_contact_by_email(self, email: str) -> Contact | None:
+        """O contacto a que o email pertence (principal ou não); `email` já normalizado."""
+        row = self.conn.execute(
+            "SELECT contact_id FROM contact_emails WHERE email = %s", (email,)
+        ).fetchone()
+        return self.get_contact(row["contact_id"]) if row else None
+
     def add_contact(self, email, first_name, last_name, company_id=None) -> Contact:
         try:
             with self.conn.transaction():
