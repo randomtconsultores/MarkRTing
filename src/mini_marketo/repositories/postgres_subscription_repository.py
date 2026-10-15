@@ -4,6 +4,8 @@ import psycopg
 
 from ..domain.subscription import SubscriptionRequest
 
+MAX_ERROR = 500
+
 
 def utc(moment):
     return moment.replace(tzinfo=timezone.utc)
@@ -46,12 +48,112 @@ class PostgresSubscriptionRepository:
         ).fetchone()
         if row is None:
             return None
-        purposes = tuple(r["purpose"] for r in self.conn.execute(
-            "SELECT purpose FROM subscription_request_purposes WHERE request_id = %s ORDER BY purpose",
-            (request_id,),
-        ).fetchall())
+        return self._to_request(row, self._purposes([request_id]))
+
+    def list_due(self, now, not_before, limit):
+        rows = self.conn.execute(
+            "SELECT * FROM subscription_requests WHERE delivery_status = 'pending' "
+            "AND confirmed_at IS NULL AND next_attempt_at <= %s AND created_at >= %s "
+            "ORDER BY id LIMIT %s",
+            (utc(now), utc(not_before), limit),
+        ).fetchall()
+        purposes = self._purposes([r["id"] for r in rows])
+        return [self._to_request(r, purposes) for r in rows]
+
+    def claim(self, request_id, now) -> bool:
+        with self.conn.transaction():
+            cur = self.conn.execute(
+                "UPDATE subscription_requests SET delivery_status = 'sending', "
+                "attempts = attempts + 1, claimed_at = %s "
+                "WHERE id = %s AND delivery_status = 'pending' AND confirmed_at IS NULL",
+                (utc(now), request_id),
+            )
+        return cur.rowcount == 1
+
+    def release_stale(self, before) -> int:
+        with self.conn.transaction():
+            cur = self.conn.execute(
+                "UPDATE subscription_requests SET delivery_status = 'pending', claimed_at = NULL "
+                "WHERE delivery_status = 'sending' AND claimed_at < %s",
+                (utc(before),),
+            )
+        return cur.rowcount
+
+    def release(self, request_id, undo_attempt=True):
+        undo = ", attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END" if undo_attempt else ""
+        with self.conn.transaction():
+            self.conn.execute(
+                "UPDATE subscription_requests SET delivery_status = 'pending', claimed_at = NULL"
+                + undo + " WHERE id = %s AND delivery_status = 'sending'",
+                (request_id,),
+            )
+
+    def mark_sent(self, request_id, now):
+        with self.conn.transaction():
+            self.conn.execute(
+                "UPDATE subscription_requests SET delivery_status = 'sent', sent_at = %s, "
+                "claimed_at = NULL, last_error = '' WHERE id = %s",
+                (utc(now), request_id),
+            )
+
+    def mark_failed(self, request_id, detail):
+        with self.conn.transaction():
+            self.conn.execute(
+                "UPDATE subscription_requests SET delivery_status = 'failed', claimed_at = NULL, "
+                "last_error = %s WHERE id = %s",
+                (detail[:MAX_ERROR], request_id),
+            )
+
+    def mark_skipped(self, request_id, reason):
+        with self.conn.transaction():
+            self.conn.execute(
+                "UPDATE subscription_requests SET delivery_status = 'skipped', claimed_at = NULL, "
+                "skip_reason = %s WHERE id = %s",
+                (reason, request_id),
+            )
+
+    def reschedule(self, request_id, retry_at, detail):
+        with self.conn.transaction():
+            self.conn.execute(
+                "UPDATE subscription_requests SET delivery_status = 'pending', claimed_at = NULL, "
+                "next_attempt_at = %s, last_error = %s WHERE id = %s",
+                (utc(retry_at), detail[:MAX_ERROR], request_id),
+            )
+
+    def mark_confirmed(self, request_id, now) -> bool:
+        with self.conn.transaction():
+            cur = self.conn.execute(
+                "UPDATE subscription_requests SET confirmed_at = %s "
+                "WHERE id = %s AND confirmed_at IS NULL",
+                (utc(now), request_id),
+            )
+        return cur.rowcount == 1
+
+    def count_sent_since(self, since) -> int:
+        return self.conn.execute(
+            "SELECT count(*) AS n FROM subscription_requests "
+            "WHERE delivery_status = 'sent' AND sent_at >= %s",
+            (utc(since),),
+        ).fetchone()["n"]
+
+    def _purposes(self, ids) -> dict[int, tuple[str, ...]]:
+        if not ids:
+            return {}
+        rows = self.conn.execute(
+            "SELECT request_id, purpose FROM subscription_request_purposes "
+            "WHERE request_id = ANY(%s) ORDER BY request_id, purpose",
+            (list(ids),),
+        ).fetchall()
+        found: dict[int, list[str]] = {}
+        for row in rows:
+            found.setdefault(row["request_id"], []).append(row["purpose"])
+        return {key: tuple(value) for key, value in found.items()}
+
+    @staticmethod
+    def _to_request(row, purposes) -> SubscriptionRequest:
         data = dict(row)
-        for key in ("created_at", "next_attempt_at", "sent_at", "confirmed_at"):
-            data[key] = data[key].astimezone(timezone.utc).replace(tzinfo=None) if data[key] else None
         data.pop("claimed_at")
-        return SubscriptionRequest(**data, purposes=purposes)
+        for key in ("created_at", "next_attempt_at", "sent_at", "confirmed_at"):
+            value = data[key]
+            data[key] = value.astimezone(timezone.utc).replace(tzinfo=None) if value else None
+        return SubscriptionRequest(**data, purposes=purposes.get(data["id"], ()))
