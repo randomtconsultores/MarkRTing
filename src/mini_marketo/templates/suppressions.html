@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Supressões · Mini-Marketo{% endblock %}
+{% block content %}
+<section>
+  <h2>Endereços suprimidos</h2>
+  <p>Um endereço suprimido não recebe nenhum envio, seja qual for a finalidade ou o consentimento. Os bounces permanentes e as queixas entram automaticamente e não podem ser removidos aqui; só as supressões manuais.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+</section>
+
+<section>
+  <h2>Suprimir um endereço</h2>
+  <form method="post" action="/suppressions">
+    <label>Email <input type="email" name="email" value="{{ form.email or '' }}" required></label>
+    <label>Nota <input name="detail" value="{{ form.detail or '' }}" maxlength="500"></label>
+    <button>Suprimir</button>
+  </form>
+</section>
+
+<section>
+  <h2>Lista ({{ suppressions|length }})</h2>
+  <table>
+    <thead><tr><th>Data (UTC)</th><th>Email</th><th>Motivo</th><th>Origem</th><th>Detalhe</th><th></th></tr></thead>
+    <tbody>
+    {% for s in suppressions %}
+      <tr>
+        <td>{{ s.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>{{ s.email }}</td>
+        <td><span class="badge badge-{{ s.reason }}">{{ reasons[s.reason] }}</span></td>
+        <td>{{ sources[s.source] }}</td>
+        <td>{{ s.detail }}</td>
+        <td>
+          {% if s.reason in removable %}
+          <form method="post" action="/suppressions/remove">
+            <input type="hidden" name="email" value="{{ s.email }}">
+            <button>Remover</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6">Ainda não há endereços suprimidos.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -1,12 +1,15 @@
+import hmac
+import json
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from itertools import zip_longest
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -16,6 +19,10 @@ from .domain.campaign import CAMPAIGN_STATUSES, MESSAGE_STATUSES, SKIP_REASONS
 from .domain.consent import PURPOSES, ContactNotFoundError
 from .domain.contact import ValidationError
 from .domain.segment import CONSENT_FIELD_PREFIX, Criterion, Segment
+from .domain.suppression import REASONS as SUPPRESSION_REASONS
+from .domain.suppression import REMOVABLE_REASONS
+from .domain.suppression import SOURCES as SUPPRESSION_SOURCES
+from .email_events import apply_email_event
 from .mailer import ConfigError
 from .pagination import PAGE_SIZES, paginate, parse_page, parse_per_page
 from .repositories.campaign_repository import CampaignRepository
@@ -39,6 +46,10 @@ SegmentFactory = Callable[[], AbstractContextManager[SegmentService]]
 ConsentFactory = Callable[[], AbstractContextManager[ConsentService]]
 CampaignFactory = Callable[[], AbstractContextManager[CampaignService]]
 UnsubscribeFactory = Callable[[], AbstractContextManager[UnsubscribeService]]
+SuppressionFactory = Callable[[], AbstractContextManager[SuppressionService]]
+
+EVENTS_TOKEN_MIN_LENGTH = 32
+MAX_EVENT_BYTES = 8192
 
 FORM_ROWS = 10
 FIELD_LABELS = {
@@ -261,12 +272,67 @@ def build_campaign_service_factory(
     return open_campaigns
 
 
+def build_suppression_service_factory(
+    db_path: str | Path, database_url: str | None = None
+) -> SuppressionFactory:
+    """Sem criar/migrar o esquema (já feito por build_service_factory)."""
+    if database_url:
+        from .postgres_database import connect
+        from .repositories.postgres_suppression_repository import PostgresSuppressionRepository
+
+        @contextmanager
+        def open_suppressions():
+            conn = connect(database_url)
+            try:
+                yield SuppressionService(PostgresSuppressionRepository(conn))
+            finally:
+                conn.close()
+
+        return open_suppressions
+
+    @contextmanager
+    def open_suppressions():
+        conn = sqlite_connect(db_path)
+        try:
+            yield SuppressionService(SuppressionRepository(conn))
+        finally:
+            conn.close()
+
+    return open_suppressions
+
+
 def load_unsubscribe_links() -> UnsubscribeLinks | None:
     """None se o URL público ou a chave não estão configurados: nenhuma ligação é aceite."""
     try:
         return UnsubscribeLinks.from_env()
     except ConfigError:
         return None
+
+
+def check_events_token(token: str | None) -> str | None:
+    """None (ou vazio) desativa o endpoint de eventos. Um token curto é um erro de configuração:
+    desativar em silêncio esconderia o problema, e aceitá-lo deixaria o endpoint fraco."""
+    token = (token or "").strip()
+    if not token:
+        return None
+    if len(token) < EVENTS_TOKEN_MIN_LENGTH:
+        raise ConfigError(
+            f"MINI_MARKETO_EVENTS_TOKEN tem de ter pelo menos {EVENTS_TOKEN_MIN_LENGTH} caracteres."
+        )
+    return token
+
+
+def load_events_token(env: Mapping[str, str] | None = None) -> str | None:
+    env = os.environ if env is None else env
+    return check_events_token(env.get("MINI_MARKETO_EVENTS_TOKEN", ""))
+
+
+def bearer_matches(header: str | None, token: str) -> bool:
+    scheme, _, value = (header or "").partition(" ")
+    value = value.strip()
+    if scheme.lower() != "bearer" or not value:
+        return False
+    return hmac.compare_digest(value.encode("utf-8"), token.encode("utf-8"))
 
 
 def build_unsubscribe_service_factory(
@@ -310,7 +376,11 @@ def create_app(
     consent_service: ConsentService | None = None,
     campaign_service: CampaignService | None = None,
     unsubscribe_service: UnsubscribeService | None = None,
+    suppression_service: SuppressionService | None = None,
+    events_token: str | None = None,
 ) -> FastAPI:
+    # Sem token explícito lê-se o ambiente; "" desativa o endpoint (útil nos testes).
+    token = check_events_token(events_token) if events_token is not None else load_events_token()
     if service is not None:
         # Serviços injetados (testes): partilhados, não são abertos nem fechados por pedido.
         @contextmanager
@@ -340,12 +410,19 @@ def create_app(
             if unsubscribe_service is None:
                 raise RuntimeError("create_app: unsubscribe_service não foi injetado.")
             yield unsubscribe_service
+
+        @contextmanager
+        def open_suppressions():
+            if suppression_service is None:
+                raise RuntimeError("create_app: suppression_service não foi injetado.")
+            yield suppression_service
     else:
         open_service = build_service_factory(db_path, database_url)
         open_segments = build_segment_service_factory(db_path, database_url)
         open_consents = build_consent_service_factory(db_path, database_url)
         open_campaigns = build_campaign_service_factory(db_path, database_url)
         open_unsubscribe = build_unsubscribe_service_factory(db_path, database_url)
+        open_suppressions = build_suppression_service_factory(db_path, database_url)
 
     templates = Jinja2Templates(directory=str(BASE / "templates"))
 
@@ -372,11 +449,16 @@ def create_app(
         with open_unsubscribe() as svc:
             yield svc
 
+    def get_suppressions() -> Iterator[SuppressionService]:
+        with open_suppressions() as svc:
+            yield svc
+
     Svc = Annotated[ContactService, Depends(get_service)]
     Seg = Annotated[SegmentService, Depends(get_segments)]
     Cons = Annotated[ConsentService, Depends(get_consents)]
     Camp = Annotated[CampaignService, Depends(get_campaigns)]
     Unsub = Annotated[UnsubscribeService, Depends(get_unsubscribe)]
+    Supp = Annotated[SuppressionService, Depends(get_suppressions)]
 
     def page(request: Request, service: ContactService, error=None, form=None, status=200):
         return templates.TemplateResponse(
@@ -437,6 +519,16 @@ def create_app(
             {**view, "purposes": PURPOSES, "statuses": CAMPAIGN_STATUSES,
              "message_statuses": MESSAGE_STATUSES, "skip_reasons": SKIP_REASONS,
              "error": error},
+            status_code=status,
+        )
+
+    def suppressions_page(request: Request, suppressions: SuppressionService, error=None,
+                          form=None, status=200):
+        return templates.TemplateResponse(
+            request, "suppressions.html",
+            {"suppressions": suppressions.list(), "reasons": SUPPRESSION_REASONS,
+             "sources": SUPPRESSION_SOURCES, "removable": REMOVABLE_REASONS,
+             "error": error, "form": form or {}},
             status_code=status,
         )
 
@@ -653,6 +745,60 @@ def create_app(
         except ValidationError as exc:
             return campaign_page(request, campaigns, campaign_id, str(exc), 422)
         return RedirectResponse(f"/campaigns/{campaign_id}", status_code=303)
+
+    @app.get("/suppressions")
+    def suppressions_list(request: Request, suppressions: Supp):
+        return suppressions_page(request, suppressions)
+
+    @app.post("/suppressions")
+    def suppression_add(request: Request, suppressions: Supp, email: str = Form(""),
+                        detail: str = Form("")):
+        # Origem e motivo são fixados no servidor: esta interface é uma ação administrativa.
+        form = {"email": email, "detail": detail}
+        try:
+            suppressions.add(email, "manual", "admin", detail)
+        except ValidationError as exc:
+            return suppressions_page(request, suppressions, str(exc), form, 422)
+        return RedirectResponse("/suppressions", status_code=303)
+
+    @app.post("/suppressions/remove")
+    def suppression_remove(request: Request, suppressions: Supp, email: str = Form("")):
+        try:
+            suppressions.remove(email)
+        except ValidationError as exc:
+            return suppressions_page(request, suppressions, str(exc), None, 422)
+        return RedirectResponse("/suppressions", status_code=303)
+
+    @app.post("/events/email")
+    async def email_event(request: Request):
+        # Chamado por um sistema externo (público). Desativado sem token (404); com token, só
+        # aceita `Authorization: Bearer`. A ligação à base de dados só abre depois de autenticar.
+        if token is None:
+            raise HTTPException(status_code=404, detail="Not Found")
+        if not bearer_matches(request.headers.get("authorization"), token):
+            raise HTTPException(
+                status_code=401, detail="Não autorizado.", headers={"WWW-Authenticate": "Bearer"}
+            )
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > MAX_EVENT_BYTES:
+            raise HTTPException(status_code=413, detail="Pedido demasiado grande.")
+        body = await request.body()
+        if len(body) > MAX_EVENT_BYTES:
+            raise HTTPException(status_code=413, detail="Pedido demasiado grande.")
+        try:
+            payload = json.loads(body)
+        except ValueError as exc:  # inclui UnicodeDecodeError
+            raise HTTPException(status_code=422, detail="JSON inválido.") from exc
+
+        def record():
+            with open_suppressions() as svc:
+                return apply_email_event(svc, payload)
+
+        try:
+            outcome = await run_in_threadpool(record)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return JSONResponse({"status": outcome})
 
     @app.get("/unsubscribe/{token}")
     def unsubscribe_confirm_page(request: Request, unsub: Unsub, token: str):
