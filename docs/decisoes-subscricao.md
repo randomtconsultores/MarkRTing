@@ -4,7 +4,7 @@ Complementa [as decisões da etapa 3](decisoes-etapa3.md), sem repetir as decis�
 
 ## Estado
 
-Implementação na branch `feat/etapa3-subscricao`, ainda por integrar. O PR 4 (supressão) foi integrado no PR GitHub #14, merge `5b7b6d5`. A etapa 3 não se considera encerrada só porque esta implementação passou os testes.
+Implementação na branch `feat/etapa3-subscricao`, validada por testes reportados no commit `a307b2d`, ainda por rever e integrar. O PR 4 (supressão) foi integrado no PR GitHub #14, merge `5b7b6d5`. A etapa 3 não se considera encerrada só porque esta implementação passou os testes.
 
 ## Requisitos e fluxo
 
@@ -21,9 +21,11 @@ O consentimento continua a ser do contacto, por finalidade, como na etapa 2. Con
 
 - Migração v8 nos dois motores: `subscription_requests` e `subscription_request_purposes`, com chave estrangeira e remoção em cascata. Acrescenta tabelas e índices, sem transformar dados anteriores.
 - Pedido e finalidades são gravados na mesma transação. O limite de três pedidos por endereço numa janela de 24 horas é verificado nessa transação: SQLite usa `BEGIN IMMEDIATE`; PostgreSQL usa bloqueio consultivo por endereço. Não se faz uma contagem desligada da escrita.
+- A confirmação também é transacional: criação ou reutilização do contacto, concessão das finalidades e `confirmed_at` são tratados por `ConfirmationRepository`, sem chamar operações que façam commit intermédio. SQLite usa `BEGIN IMMEDIATE`; PostgreSQL usa transação e bloqueios do pedido, do endereço e do contacto. O serviço exige a mesma ligação para os repositórios envolvidos. Uma falha nas escritas faz rollback integral.
 - O estado de envio (`pending`, `sending`, `sent`, `failed`, `skipped`) é independente de `confirmed_at`. A expiração é calculada, não há estado `expired` persistido. Pedidos expirados podem continuar `pending`, mas deixam de ser selecionados para envio.
 - O token contém id do pedido e assinatura HMAC-SHA256 truncada a 128 bits, sem guardar o token. Reutiliza a configuração do cancelamento, com prefixo de assinatura `subscribe:`: tokens de confirmação e cancelamento não são intercambiáveis. A validação usa `fullmatch`.
 - Um pedido não confirmado expira exatamente às 48 horas após a criação, não após o envio. Uma ligação já confirmada continua a mostrar o resultado após esse prazo, sem novas escritas.
+- A expiração é revalidada imediatamente antes de chamar o SMTP, depois de preparar o texto. Um pedido que expire enquanto aguarda no lote ou durante a preparação fica `skipped`, com motivo `expirado`, sem chamar o SMTP. Isto não garante que a ligação ainda seja válida quando a mensagem chegar à caixa de correio.
 - Supressão é verificada ao pedir, antes de enviar e antes de confirmar pedidos ainda não confirmados. Não levanta supressões nem ignora queixas. A consulta de uma ligação já confirmada não reavalia a supressão, mas não altera consentimento nem autoriza envios.
 - Pedidos válidos gravados, limitados, suprimidos ou filtrados pelo honeypot recebem o mesmo redirecionamento. Um endereço já conhecido não recebe resposta diferente. Formulário inválido recebe 422 com texto genérico traduzível e os valores escapados.
 - Um endereço que já tem consentimento concedido também pode receber um novo email de confirmação, sujeito aos limites. Não existe otimização para omitir esse envio.
@@ -54,6 +56,8 @@ A aplicação web e o processo de envio precisam de partilhar base de dados, URL
 
 O processo envia primeiro confirmações e depois campanhas. O teto de confirmações é independente de `MINI_MARKETO_SMTP_DAILY_CAP`, que continua a contar apenas campanhas. Não há quota global atómica comum aos dois tipos ou a vários processos.
 
+Throttling, falhas consecutivas ou uma paragem desconhecida nas confirmações impedem a fase de campanhas nessa ronda. Erro fatal termina com código 2. Em `--loop`, uma paragem não fatal das confirmações aguarda pelo menos o recuo inicial antes da ronda seguinte (60 segundos por omissão). Atingir apenas o teto diário das confirmações permite a fase de campanhas, porque os tetos são independentes. `--poll-seconds` tem de ser positivo.
+
 ### Exposição pública
 
 A aplicação ainda não autentica as páginas administrativas. No proxy, permitir apenas os caminhos necessários:
@@ -67,10 +71,8 @@ Contactos, empresas, segmentos, campanhas, consentimento e `/suppressions` devem
 
 ## Limitações e revisão antes de produção
 
-- Confirmar não é uma única transação: criação do contacto, eventos de consentimento e `confirmed_at` são escritos separadamente. Uma falha parcial pode deixar parte do trabalho gravada. Uma repetição pode completar o pedido, mas não há garantia de tudo-ou-nada.
-- Confirmações simultâneas podem acrescentar eventos de consentimento repetidos. O teste concorrente verifica um contacto e o estado final, não unicidade de eventos. Uma corrida com retirada de consentimento merece teste específico.
-- O envio seleciona pedidos dentro da validade, mas não reavalia a expiração a cada mensagem do lote. Um pedido junto do limite pode expirar antes de o email sair.
-- O comando só interrompe antes das campanhas se as confirmações tiverem erro fatal; uma paragem por throttling nas confirmações não impede atualmente a fase de campanhas. Rever para não contrariar a limitação pedida pelo servidor SMTP.
+- A transação de confirmação não constitui uma garantia geral de serialização com todos os outros fluxos. Uma corrida com retirada de consentimento, alteração de emails ou supressão merece testes específicos; nem todos esses fluxos usam os mesmos bloqueios.
+- O instante de expiração usado ao confirmar é capturado antes de esperar pelos bloqueios. Reavaliar se uma espera prolongada tiver de invalidar pedidos que chegaram ainda dentro do prazo.
 - Sem limpeza automática ou prazo de retenção dos pedidos, confirmados ou não. A expiração da ligação não apaga dados pessoais.
 - Limite por email, honeypot e teto diário não substituem limitação por IP nem proteção contra ataques distribuídos.
 - SMTP e gravação do estado não são atómicos: falhar depois da entrega e antes de `mark_sent` pode causar repetição após recuperação.
@@ -87,8 +89,15 @@ Execuções feitas pelo utilizador no ambiente Copilot, com PostgreSQL ativo; n�
 | Após parte 2a | 882 aprovados e uma falha no teste de token |
 | `e20d663` — parte 2b | 932 aprovados e 1 ignorado em 69,88 s |
 | `83f913e` — páginas públicas | 974 aprovados e 1 ignorado em 72,39 s |
+| `a307b2d` — após as três correções | 998 aprovados e 1 ignorado em 79,92 s |
 
 A falha do teste de token foi corrigida em `7fdca4c`: trocar a última letra por `A` não adulterava uma assinatura que já terminava em `A`. Foi também acrescentada a rejeição de quebra de linha final no token de confirmação.
+
+Correções incluídas na última execução:
+
+- `7535ba8`: paragem entre confirmações e campanhas; testes de throttling, falhas consecutivas, erros fatais, teto diário e espera em loop.
+- `9fe5131`: expiração por mensagem; testes do limite exato, de espera no lote e de preparação demorada.
+- `a307b2d`: confirmação transacional; testes de rollback no segundo consentimento e na gravação de `confirmed_at`, com contacto novo ou existente, e reutilização de token sem anular retirada posterior.
 
 O teste ignorado é a variante PostgreSQL de um teste do comando que só prepara um ficheiro SQLite. Os restantes testes parametrizados continuam a exercitar os dois motores. Não significa cobertura de ponta a ponta do comando com PostgreSQL.
 
