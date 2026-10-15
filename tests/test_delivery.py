@@ -42,6 +42,7 @@ def make_worker(s, mailer, now=T0, links=LINKS, **limits):
         mailer,
         DeliveryLimits(**limits),
         links,
+        s.suppressions,
         now=lambda: now,
         sleep=sleeps.append,
     )
@@ -119,7 +120,7 @@ def test_the_command_refuses_to_start_without_the_unsubscribe_configuration(monk
 
 def test_a_worker_cannot_be_built_without_unsubscribe_links():
     with pytest.raises(ValueError, match="cancelamento"):
-        DeliveryWorker(None, None, None, None, DeliveryLimits(), None)
+        DeliveryWorker(None, None, None, None, DeliveryLimits(), None, None)
 
 
 # --- com base de dados, nos dois backends ---

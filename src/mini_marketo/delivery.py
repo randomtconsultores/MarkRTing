@@ -8,6 +8,7 @@ from .domain.campaign import (
     SKIP_CONTACT_MISSING,
     SKIP_EMAIL_REMOVED,
     SKIP_NO_CONSENT,
+    SKIP_SUPPRESSED,
     render,
     utc_now,
 )
@@ -76,6 +77,7 @@ class RunSummary:
     failed: int = 0
     retried: int = 0
     skipped: int = 0
+    suppressed: int = 0  # endereços suprimidos nesta ronda por rejeição do servidor (contam em failed)
     stopped: str = ""
 
 
@@ -84,21 +86,26 @@ class DeliveryWorker:
 
     `campaigns`, `contacts` e `consents` são repositórios do mesmo backend; `mailer` tem
     `send(to, subject, text, html, headers)`; `links` é o `UnsubscribeLinks`, obrigatório: não
-    se envia nenhuma mensagem sem ligação de cancelamento. O consentimento verifica-se de novo
-    a cada mensagem.
+    se envia nenhuma mensagem sem ligação de cancelamento. `suppressions` é o
+    `SuppressionService`, também obrigatório: um endereço suprimido não recebe nada, seja qual
+    for a finalidade. O consentimento e a supressão verificam-se de novo a cada mensagem.
     """
 
     def __init__(
-        self, campaigns, contacts, consents, mailer, limits, links, now=utc_now, sleep=time.sleep
+        self, campaigns, contacts, consents, mailer, limits, links, suppressions,
+        now=utc_now, sleep=time.sleep,
     ):
         if links is None:
             raise ValueError("O envio exige uma ligação de cancelamento de subscrição.")
+        if suppressions is None:
+            raise ValueError("O envio exige a lista de supressão.")
         self.campaigns = campaigns
         self.contacts = contacts
         self.consents = consents
         self.mailer = mailer
         self.limits = limits
         self.links = links
+        self.suppressions = suppressions
         self.now = now
         self.sleep = sleep
 
@@ -128,8 +135,10 @@ class DeliveryWorker:
                     self.sleep(1 / limits.rate_per_second)
                 elif outcome == "skipped":
                     summary.skipped += 1
-                elif outcome == "failed":
+                elif outcome in ("failed", "bounced"):
                     summary.failed += 1
+                    if outcome == "bounced":
+                        summary.suppressed += 1
                     streak += 1
                 elif outcome == "fatal":
                     stop = f"erro_fatal: {detail}"
@@ -154,6 +163,8 @@ class DeliveryWorker:
             return self._skip(message, SKIP_CONTACT_MISSING)
         if message.email not in contact.emails:
             return self._skip(message, SKIP_EMAIL_REMOVED)
+        if self.suppressions.is_suppressed(message.email):
+            return self._skip(message, SKIP_SUPPRESSED)
         if not is_eligible(self.consents.list_for_contact(contact.id), campaign.purpose):
             return self._skip(message, SKIP_NO_CONSENT)
         unsubscribe_url = self.links.url_for(message.id)
@@ -182,6 +193,12 @@ class DeliveryWorker:
             self.campaigns.release([message.id], undo_attempt=True)
             return "fatal", detail
         if error.kind == "permanent":
+            if error.address_rejected:
+                # Só uma recusa que diz que o endereço não serve suprime. Uma recusa por
+                # política (IP bloqueado, conteúdo) é um problema nosso, não do destinatário.
+                self.suppressions.add(message.email, "hard_bounce", "smtp", detail)
+                self.campaigns.mark_failed(message.id, detail)
+                return "bounced", detail
             self.campaigns.mark_failed(message.id, detail)
             return "failed", detail
         if message.attempts >= self.limits.max_attempts:

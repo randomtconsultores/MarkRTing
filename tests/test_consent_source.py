@@ -59,6 +59,8 @@ def test_migration_v6_keeps_every_event_and_widens_the_source(db):
     with pytest.raises(db.integrity_error):
         insert_event(db, ana.id, "unsubscribe")
 
+    # Recuar para a v5 desfaz também a v7 (supressões), que a reabertura volta a criar.
+    db.execute("DROP TABLE suppressions")
     db.set_version(5)
     again = db.reopen()
     try:

@@ -22,10 +22,12 @@ MESSAGE_STATUSES = {
 SKIP_NO_CONSENT = "sem_consentimento"
 SKIP_EMAIL_REMOVED = "email_removido"
 SKIP_CONTACT_MISSING = "contacto_inexistente"
+SKIP_SUPPRESSED = "suprimido"
 SKIP_REASONS = {
     SKIP_NO_CONSENT: "Sem consentimento concedido",
     SKIP_EMAIL_REMOVED: "Email removido do contacto",
     SKIP_CONTACT_MISSING: "Contacto inexistente",
+    SKIP_SUPPRESSED: "Endereço suprimido (bounce, queixa ou manual)",
 }
 
 # Só estes marcadores são substituídos; qualquer outro texto entre chavetas fica como está.

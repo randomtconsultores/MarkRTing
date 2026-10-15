@@ -86,12 +86,28 @@ ALTER TABLE consent_events_v6 RENAME TO consent_events;
 CREATE INDEX ix_consent_contact_purpose ON consent_events (contact_id, purpose, id);
 """
 
+# Lista de supressão por endereço (não por contacto: um bounce é sobre o endereço, que pode
+# deixar de estar associado a qualquer contacto). Só cria objetos novos; não toca nos dados.
+SUPPRESSIONS_V7 = """
+CREATE TABLE suppressions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    email      TEXT NOT NULL CHECK (length(email) > 0 AND email = lower(trim(email))),
+    reason     TEXT NOT NULL CHECK (reason IN ('hard_bounce', 'complaint', 'manual')),
+    source     TEXT NOT NULL CHECK (source IN ('smtp', 'event', 'admin')),
+    detail     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now')),
+    CHECK ((reason = 'manual') = (source = 'admin'))
+);
+CREATE UNIQUE INDEX ux_suppressions_email ON suppressions (email);
+"""
+
 # Esquema criado de raiz na versão-base; as versões seguintes entram em MIGRATIONS (SQL do SQLite).
 MIGRATIONS: list[Migration] = [
     (3, SEGMENTS_V3),
     (4, CONSENT_V4),
     (5, CAMPAIGNS_V5),
     (6, CONSENT_SOURCE_V6),
+    (7, SUPPRESSIONS_V7),
 ]
 SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 

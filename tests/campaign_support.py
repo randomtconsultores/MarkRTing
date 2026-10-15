@@ -2,6 +2,7 @@ from datetime import datetime
 
 from mini_marketo.domain.segment import Criterion
 from mini_marketo.services.campaign_service import CampaignService
+from mini_marketo.services.suppression_service import SuppressionService
 
 T0 = datetime(2026, 1, 15, 12, 0, 0)
 EVERYONE = [Criterion("created_at", "after", "2000-01-01")]
@@ -19,6 +20,18 @@ def campaign_repository(db):
     return PostgresCampaignRepository(db.conn)
 
 
+def suppression_service(db):
+    if db.kind == "sqlite":
+        from mini_marketo.repositories.suppression_repository import SuppressionRepository
+
+        return SuppressionService(SuppressionRepository(db.conn))
+    from mini_marketo.repositories.postgres_suppression_repository import (
+        PostgresSuppressionRepository,
+    )
+
+    return SuppressionService(PostgresSuppressionRepository(db.conn))
+
+
 class Setup:
     """Ana e Rui com newsletter concedida, Eva sem registo, e um segmento com todos."""
 
@@ -28,8 +41,10 @@ class Setup:
         self.segments = db.segment_service()
         self.consents = db.consent_service()
         self.repo = campaign_repository(db)
+        self.suppressions = suppression_service(db)
         self.service = CampaignService(
-            self.repo, self.segments, self.segments.consents, now=lambda: now
+            self.repo, self.segments, self.segments.consents, self.suppressions,
+            now=lambda: now,
         )
         self.ana = self.contacts.create_contact("Ana", "Silva", "ana@a.pt")
         self.rui = self.contacts.create_contact("Rui", "Costa", "rui@a.pt")

@@ -3,7 +3,8 @@
 Lê o SMTP e os limites do ambiente (MINI_MARKETO_SMTP_*), o URL público e a chave das ligações
 de cancelamento (MINI_MARKETO_PUBLIC_URL e MINI_MARKETO_SECRET_KEY), usa a mesma base de dados
 da aplicação (MINI_MARKETO_DB ou MINI_MARKETO_DATABASE_URL) e envia as mensagens pendentes.
-Sem ligação de cancelamento configurada, não arranca.
+Sem ligação de cancelamento configurada, não arranca. Os endereços suprimidos (bounces,
+queixas e supressões manuais) não recebem nada.
 """
 
 import argparse
@@ -17,18 +18,21 @@ from .database import init_db as sqlite_init_db
 from .delivery import DeliveryLimits, DeliveryWorker
 from .mailer import SmtpConfig, SmtpMailer
 from .main import DEFAULT_DB
+from .services.suppression_service import SuppressionService
 from .unsubscribe import UnsubscribeLinks
 
 log = logging.getLogger("mini_marketo.send_worker")
 
 
 def open_repositories(db_path, database_url):
-    """Devolve (ligação, campanhas, contactos, consentimentos), com o esquema já migrado."""
+    """Devolve (ligação, campanhas, contactos, consentimentos, supressões), com o esquema já
+    migrado. As supressões são já um SuppressionService."""
     if database_url:
         from .postgres_database import connect, init_db
         from .repositories.postgres_campaign_repository import PostgresCampaignRepository
         from .repositories.postgres_consent_repository import PostgresConsentRepository
         from .repositories.postgres_contact_repository import PostgresContactRepository
+        from .repositories.postgres_suppression_repository import PostgresSuppressionRepository
 
         conn = connect(database_url)
         init_db(conn)
@@ -37,14 +41,22 @@ def open_repositories(db_path, database_url):
             PostgresCampaignRepository(conn),
             PostgresContactRepository(conn),
             PostgresConsentRepository(conn),
+            SuppressionService(PostgresSuppressionRepository(conn)),
         )
     from .repositories.campaign_repository import CampaignRepository
     from .repositories.consent_repository import ConsentRepository
     from .repositories.contact_repository import ContactRepository
+    from .repositories.suppression_repository import SuppressionRepository
 
     conn = sqlite_connect(db_path)
     sqlite_init_db(conn)
-    return conn, CampaignRepository(conn), ContactRepository(conn), ConsentRepository(conn)
+    return (
+        conn,
+        CampaignRepository(conn),
+        ContactRepository(conn),
+        ConsentRepository(conn),
+        SuppressionService(SuppressionRepository(conn)),
+    )
 
 
 def main(argv=None) -> int:
@@ -65,20 +77,21 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(f"Configuração inválida: {exc}", file=sys.stderr)
         return 2
-    conn, campaigns, contacts, consents = open_repositories(
+    conn, campaigns, contacts, consents, suppressions = open_repositories(
         DEFAULT_DB, os.environ.get("MINI_MARKETO_DATABASE_URL")
     )
     mailer = SmtpMailer(config)
-    worker = DeliveryWorker(campaigns, contacts, consents, mailer, limits, links)
+    worker = DeliveryWorker(campaigns, contacts, consents, mailer, limits, links, suppressions)
     try:
         while True:
             summary = worker.run_once()
             log.info(
-                "enviadas=%d falhadas=%d repetidas=%d ignoradas=%d paragem=%s",
+                "enviadas=%d falhadas=%d repetidas=%d ignoradas=%d suprimidas=%d paragem=%s",
                 summary.sent,
                 summary.failed,
                 summary.retried,
                 summary.skipped,
+                summary.suppressed,
                 summary.stopped or "-",
             )
             if summary.stopped.startswith("erro_fatal"):

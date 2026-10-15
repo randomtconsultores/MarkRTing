@@ -241,6 +241,7 @@ def test_migration_v5_applies_on_top_of_v4_and_keeps_existing_data(db):
     s = Setup(db)
     db.execute("DROP TABLE email_messages")
     db.execute("DROP TABLE campaigns")
+    db.execute("DROP TABLE suppressions")  # recuar para a v4 desfaz também a v7
     db.set_version(4)
     again = db.reopen()
     try:

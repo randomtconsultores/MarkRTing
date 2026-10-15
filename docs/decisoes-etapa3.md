@@ -1,6 +1,6 @@
 # Decisões de arquitetura - Etapa 3
 
-Estado: em curso. A etapa 3 divide-se em quatro PRs, pela ordem **1, 2, 4, 3**: (1) campanhas e envio (integrado), (2) cancelar subscrição, (4) lista de supressão e bounces, (3) subscrição pública com confirmação por email (double opt-in).
+Estado: em curso. A etapa 3 divide-se em quatro PRs, pela ordem **1, 2, 4, 3**: (1) campanhas e envio (integrado), (2) cancelar subscrição (integrado), (4) lista de supressão e bounces (validado, a integrar), (3) subscrição pública com confirmação por email (double opt-in).
 
 **Não se envia nenhuma campanha real antes de o PR 4 estar integrado.** Sem tratamento de bounces e queixas, envios em volume prejudicam a reputação e, acima de 5000 mensagens por dia, ficam fora das regras dos grandes fornecedores de caixas de correio.
 
@@ -54,7 +54,7 @@ Requisito: cada email leva uma ligação para cancelar a subscrição, e os clie
 - O processo de envio recusa arrancar sem `MINI_MARKETO_PUBLIC_URL` (https; http só para servidor local) e sem chave, e `DeliveryWorker` não se constrói sem ligações: não se envia nenhuma mensagem sem cancelamento.
 - Migração v6: no PostgreSQL, trocar a restrição `consent_events_source_check` (falha se o nome não existir, em vez de deixar a antiga ativa). No SQLite, que não altera restrições `CHECK`, a tabela é reconstruída: cria-se a nova, copiam-se os eventos por ordem de id (o estado atual depende do id), apaga-se a antiga, renomeia-se e recria-se o índice. Um teste confirma que todos os eventos e ids se mantêm, nos dois backends.
 
-**Aviso de operação: a aplicação não tem autenticação.** Em produção, só `/unsubscribe/*` e `/static/*` devem estar acessíveis publicamente. Contactos, segmentos, campanhas e consentimento têm de ficar atrás de uma rede privada ou de um proxy com autenticação. Um proxy que só encaminhe esses dois prefixos resolve-o.
+**Aviso de operação: a aplicação não tem autenticação.** Em produção, só `/unsubscribe/*`, `/events/*` e `/static/*` devem estar acessíveis publicamente. Contactos, segmentos, campanhas, consentimento e a lista de supressão (`/suppressions`) têm de ficar atrás de uma rede privada ou de um proxy com autenticação. `/events/*` é chamado pelo fornecedor de email e tem autenticação própria por token (ver o PR 4). Um proxy que só encaminhe esses três prefixos resolve-o.
 
 **Configuração (variáveis de ambiente)**
 
@@ -73,8 +73,9 @@ Requisito: cada email leva uma ligação para cancelar a subscrição, e os clie
 | `MINI_MARKETO_PUBLIC_URL` | URL público da aplicação, para as ligações de cancelamento (obrigatória para enviar e para a página de cancelamento) | - |
 | `MINI_MARKETO_SECRET_KEY` | chave dos tokens, mínimo 32 caracteres (obrigatória, como a anterior) | - |
 | `MINI_MARKETO_SECRET_KEY_PREVIOUS` | chaves antigas, separadas por vírgulas, só para verificar | vazia |
+| `MINI_MARKETO_EVENTS_TOKEN` | token do endpoint de eventos de email (`POST /events/email`), mínimo 32 caracteres; sem ele o endpoint não existe | vazia (desativado) |
 
-A base de dados é a mesma da aplicação (`MINI_MARKETO_DB` ou `MINI_MARKETO_DATABASE_URL`). A aplicação web e o processo de envio têm de partilhar o mesmo `MINI_MARKETO_PUBLIC_URL` e a mesma chave. Gerar uma chave: `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Nunca pôr a chave em código, testes ou documentação.
+A base de dados é a mesma da aplicação (`MINI_MARKETO_DB` ou `MINI_MARKETO_DATABASE_URL`). A aplicação web e o processo de envio têm de partilhar o mesmo `MINI_MARKETO_PUBLIC_URL` e a mesma chave. Gerar uma chave ou um token: `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Nunca pôr a chave ou o token em código, testes ou documentação.
 
 **Operação**
 
@@ -85,7 +86,7 @@ A base de dados é a mesma da aplicação (`MINI_MARKETO_DB` ou `MINI_MARKETO_DA
 
 **Limitações conhecidas**
 
-- Ainda sem lista de supressão nem tratamento de bounces e queixas assíncronas (PR 4). Um 5xx recusado no momento do envio já é permanente, mas não impede campanhas futuras para o mesmo endereço.
+- Sem lista de supressão nem tratamento de bounces e queixas assíncronas: resolvido no PR 4 (abaixo), com as limitações aí indicadas.
 - O cancelamento retira só a finalidade da campanha; não há «cancelar tudo» nem página de preferências.
 - Sem edição, remoção nem agendamento de campanhas; enfileirar é definitivo.
 - Enfileirar lê todos os membros do segmento e todo o histórico de consentimento em memória, como as listagens de segmentos. Reavaliar com volume medido.
@@ -100,3 +101,54 @@ A base de dados é a mesma da aplicação (`MINI_MARKETO_DB` ou `MINI_MARKETO_DA
 - PR 2: suíte completa com SQLite e PostgreSQL ativos no ramo `feat/etapa3-cancelar-subscricao`: 689 aprovados em 72,49 s. A primeira execução teve 681 aprovados e 2 falhas, ambas erro do próprio teste (um token com barras nunca chega à rota e recebe o 404 padrão do servidor, não o nosso); código de produção inalterado, teste corrigido. Inclui a migração v6 nos dois backends, com a preservação dos eventos e dos ids.
 - Nenhum teste envia email a sério e não foi enviado nenhum email real a partir desta aplicação.
 - Não verificado: o envio contra um servidor SMTP real, a aceitação do cancelamento com um clique por um cliente de correio real, as páginas no browser e a migração v6 sobre uma cópia da base de dados real.
+
+## Lista de supressão e bounces (PR 4)
+
+Requisito: um endereço que devolveu um bounce permanente, que se queixou de spam ou que foi suprimido à mão não recebe mais nenhum envio, seja qual for a campanha, a finalidade ou o consentimento. A solução não depende de um fornecedor de email concreto.
+
+**O que é novo**
+
+- Migração v7 nos dois backends: tabela `suppressions` e índice único por email. Só cria objetos novos; não toca nos dados existentes.
+- `domain/suppression.py`, `SuppressionRepository` e `PostgresSuppressionRepository`, `services/suppression_service.py`.
+- `email_events.py`: tradução de um evento de email (formato próprio) numa supressão.
+- Web: página `/suppressions` (lista, suprimir à mão, remover as manuais) e `POST /events/email`.
+- O processo de envio suprime sozinho os endereços que o servidor SMTP recusa como inexistentes; o resumo da ronda mostra quantos.
+
+**Decisões**
+
+- A supressão é por endereço e não por contacto. Um bounce diz respeito ao endereço, que pode mudar de dono, sair de um contacto ou entrar noutro. A tabela não tem chave estrangeira para contactos: apagar um contacto não levanta a supressão.
+- Bloqueia tudo: ao contrário do consentimento, que é por finalidade, um endereço suprimido não recebe nenhuma mensagem. Verifica-se duas vezes, como o consentimento: ao enfileirar (a mensagem fica ignorada com o motivo `suprimido`) e outra vez a cada mensagem, antes do consentimento, porque o endereço pode ser suprimido entretanto.
+- `CampaignService` e `DeliveryWorker` exigem a lista de supressão (como o `DeliveryWorker` já exigia as ligações de cancelamento). Um parâmetro opcional falharia em aberto: bastaria esquecê-lo numa construção futura para voltar a enviar a endereços suprimidos.
+- Motivos: `hard_bounce`, `complaint` e `manual`; origens `smtp`, `event` e `admin`. Uma supressão manual só pode ter a origem `admin`, e só essa (restrição na base de dados e na aplicação).
+- Idempotente e sem enfraquecer: repetir um evento não duplica nem altera o registo. Uma supressão manual é promovida a bounce ou queixa se chegar um desses eventos; um bounce ou uma queixa nunca é rebaixado nem substituído. Só as supressões manuais podem ser removidas na página, e a remoção volta a exigir o motivo manual na própria escrita (uma promoção concorrente não perde). Levantar um bounce ou uma queixa só se faz diretamente na base de dados, de propósito.
+- Supressão automática no envio: só quando o servidor recusa o destinatário (`SMTPRecipientsRefused`) com um 5xx cujo código melhorado (RFC 3463) é 5.1.1 (caixa inexistente), 5.1.2 (domínio inexistente), 5.1.3 (sintaxe inválida), 5.1.6 (caixa mudada) ou 5.1.10 (domínio sem MX). Não suprimem: recusas por política (5.7.x, por exemplo IP bloqueado ou conteúdo recusado), caixa cheia (5.2.x), os códigos do remetente (5.1.7 e 5.1.8) e qualquer 4xx. Um problema nosso (reputação, configuração) não pode apagar destinatários válidos.
+- Eventos externos: `POST /events/email` com um formato próprio, `{"type": "bounce", "email": "...", "permanent": true, "detail": "..."}` ou `{"type": "complaint", "email": "..."}`. Só um bounce permanente e uma queixa suprimem; um bounce temporário é ignorado (resposta 200, `ignored`). Em bounces, `permanent` é obrigatório e booleano: se faltasse, o evento teria de ser suprimido ou ignorado às cegas. Tudo é validado antes de qualquer escrita. Alternativa rejeitada: aceitar já o formato de um fornecedor (por exemplo as notificações do SES): não há ainda fornecedor escolhido, e um adaptador pequeno traduz o formato dele para este quando houver.
+- Autenticação do endpoint: `Authorization: Bearer <token>`, comparado em tempo constante com `MINI_MARKETO_EVENTS_TOKEN` (mínimo 32 caracteres). Sem token configurado, o endpoint não existe (404): não há um endpoint de escrita aberto por omissão. Um token curto é um erro de arranque, em vez de desativar em silêncio. Token em falta ou errado dá 401 com `WWW-Authenticate: Bearer`, e a ligação à base de dados só abre depois de autenticar. Corpo limitado a 8 KB (413). Sem sessão nem cookies, por isso não há CSRF a tratar.
+- As páginas de administração (`/suppressions`) não têm autenticação, como as restantes: ver o aviso de operação acima. O motivo e a origem de uma supressão manual são fixados no servidor.
+- Migração v7: uma tabela e um índice únicos; a coluna `skip_reason` das mensagens não tem restrição, por isso o novo motivo `suprimido` não obriga a reconstruir tabelas. Não tem `IF NOT EXISTS`, como as anteriores: se a tabela já existir com outra forma, a migração tem de falhar em vez de esconder uma base inconsistente.
+
+**Exemplo de chamada** (o token vem do ambiente; nunca o escrever em scripts guardados):
+
+```
+curl -X POST https://marketing.exemplo.pt/events/email \
+  -H "Authorization: Bearer $MINI_MARKETO_EVENTS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type": "bounce", "email": "alguem@exemplo.pt", "permanent": true, "detail": "550 5.1.1 user unknown"}'
+```
+
+**Limitações conhecidas**
+
+- Sem adaptador de fornecedor: as notificações assíncronas de bounces e queixas (por exemplo, SES via SNS, que são assinadas e exigem confirmação de subscrição) precisam de uma pequena ponte que as traduza para o formato acima. Com um Postfix próprio, os bounces assíncronos chegam como mensagens de email (DSN) e também precisam de uma ponte; só as recusas no momento do envio são tratadas diretamente.
+- Bounces temporários repetidos não suprimem (são ignorados). Reavaliar se se virem caixas cheias ou falhas passageiras repetidas durante meses.
+- Um único token estático, sem rotação sem reiniciar. Sem limite de pedidos; um proxy pode acrescentá-lo.
+- A página lista todos os endereços suprimidos sem paginação. Reavaliar com volume medido.
+- Levantar um bounce ou uma queixa só é possível por SQL. Um engano do fornecedor tem de ser corrigido à mão na base de dados.
+- Enfileirar lê toda a lista de endereços suprimidos em memória, como já faz com o consentimento.
+- A supressão não é retroativa: mensagens já enviadas continuam como estavam.
+
+**Validação**
+
+- Suíte completa com SQLite e PostgreSQL ativos no ramo `feat/etapa3-supressao`: 824 aprovados em 56,74 s (antes do PR: 689). A primeira execução teve 818 aprovados e 6 falhas, todas erro dos próprios testes: três testes de migração antigos (v4, v5 e v6, nos dois backends) recuam a versão do esquema apagando tabelas, mas deixavam a tabela `suppressions` da v7, e a reabertura voltava a criá-la («already exists»). Código de produção inalterado; os testes passaram a apagar também essa tabela.
+- Verificado à parte, em SQLite isolado: o SQL de gravação idempotente e as restrições da tabela.
+- Nenhum teste envia email a sério e não foi enviado nenhum email real a partir desta aplicação.
+- Não verificado: o envio contra um servidor SMTP real, os códigos 5.1.x reais de servidores de correio, o endpoint atrás de um proxy real, as páginas no browser e a migração v7 sobre uma cópia da base de dados real.
