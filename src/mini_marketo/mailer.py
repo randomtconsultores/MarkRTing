@@ -1,4 +1,5 @@
 import os
+import re
 import smtplib
 import ssl
 from collections.abc import Mapping
@@ -11,6 +12,12 @@ SECURITY_MODES = ("starttls", "ssl", "none")
 DEFAULT_PORTS = {"starttls": 587, "ssl": 465, "none": 25}
 THROTTLE_CODES = (421, 454)
 MAX_DETAIL = 300
+
+# Códigos melhorados (RFC 3463) que dizem que o ENDEREÇO do destinatário não serve: 5.1.1 caixa
+# inexistente, 5.1.2 domínio inexistente, 5.1.3 sintaxe inválida, 5.1.6 caixa mudada e 5.1.10
+# domínio sem MX. Ficam de fora as recusas por política (5.7.x), caixa cheia (5.2.x) e os códigos
+# do remetente (5.1.7 e 5.1.8): não dizem nada sobre o destinatário.
+_ADDRESS_REJECTION = re.compile(r"\b5\.1\.(?:10|1|2|3|6)\b")
 
 
 class ConfigError(ValueError):
@@ -76,12 +83,20 @@ class SendError(Exception):
 
     kind: "permanent" (não repetir), "temporary" (repetir mais tarde), "throttled" (o servidor
     pede abrandamento) ou "fatal" (configuração ou credenciais: parar tudo).
+
+    `address_rejected`: o servidor recusou o destinatário com um código que diz que o endereço
+    não serve (ver `is_address_rejection`). Só então o endereço pode ser suprimido.
     """
 
-    def __init__(self, kind: str, detail: str):
+    def __init__(self, kind: str, detail: str, address_rejected: bool = False):
         super().__init__(detail)
         self.kind = kind
         self.detail = detail
+        self.address_rejected = address_rejected
+
+
+def is_address_rejection(text: str) -> bool:
+    return bool(_ADDRESS_REJECTION.search(text))
 
 
 def _text(value) -> str:
@@ -121,7 +136,12 @@ def classify(exc: BaseException) -> SendError:
         refused = list(exc.recipients.values())
         code, message = refused[0] if refused else (550, b"")
         kind = "permanent" if 500 <= code < 600 else "temporary"
-        return SendError(kind, _short(f"{code} {_text(message)}"))
+        text = _text(message)
+        return SendError(
+            kind,
+            _short(f"{code} {text}"),
+            address_rejected=kind == "permanent" and is_address_rejection(text),
+        )
     if isinstance(exc, smtplib.SMTPResponseException):
         code = exc.smtp_code
         detail = _short(_describe(exc))

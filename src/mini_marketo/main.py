@@ -22,10 +22,12 @@ from .repositories.campaign_repository import CampaignRepository
 from .repositories.consent_repository import ConsentRepository
 from .repositories.contact_repository import ContactRepository
 from .repositories.segment_repository import SegmentRepository
+from .repositories.suppression_repository import SuppressionRepository
 from .services.campaign_service import CampaignService
 from .services.consent_service import ConsentService
 from .services.contact_service import ContactService
 from .services.segment_service import SegmentService
+from .services.suppression_service import SuppressionService
 from .services.unsubscribe_service import UnsubscribeService
 from .unsubscribe import UnsubscribeLinks
 
@@ -226,6 +228,7 @@ def build_campaign_service_factory(
         from .repositories.postgres_consent_repository import PostgresConsentRepository
         from .repositories.postgres_contact_repository import PostgresContactRepository
         from .repositories.postgres_segment_repository import PostgresSegmentRepository
+        from .repositories.postgres_suppression_repository import PostgresSuppressionRepository
 
         @contextmanager
         def open_campaigns():
@@ -234,7 +237,10 @@ def build_campaign_service_factory(
                 contacts = PostgresContactRepository(conn)
                 consents = PostgresConsentRepository(conn)
                 segments = SegmentService(PostgresSegmentRepository(conn), contacts, consents)
-                yield CampaignService(PostgresCampaignRepository(conn), segments, consents)
+                suppressions = SuppressionService(PostgresSuppressionRepository(conn))
+                yield CampaignService(
+                    PostgresCampaignRepository(conn), segments, consents, suppressions
+                )
             finally:
                 conn.close()
 
@@ -247,7 +253,8 @@ def build_campaign_service_factory(
             contacts = ContactRepository(conn)
             consents = ConsentRepository(conn)
             segments = SegmentService(SegmentRepository(conn), contacts, consents)
-            yield CampaignService(CampaignRepository(conn), segments, consents)
+            suppressions = SuppressionService(SuppressionRepository(conn))
+            yield CampaignService(CampaignRepository(conn), segments, consents, suppressions)
         finally:
             conn.close()
 

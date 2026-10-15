@@ -1,4 +1,4 @@
-from ..domain.campaign import SKIP_NO_CONSENT, Campaign, utc_now
+from ..domain.campaign import SKIP_NO_CONSENT, SKIP_SUPPRESSED, Campaign, utc_now
 from ..domain.consent import is_eligible
 from ..domain.contact import ValidationError
 
@@ -6,14 +6,18 @@ from ..domain.contact import ValidationError
 class CampaignService:
     """Campanhas e caixa de saída. O envio não acontece aqui: este serviço só enfileira.
 
-    `campaigns` é o repositório de campanhas, `segments` um SegmentService e `consents` o
-    repositório de consentimento, todos do mesmo backend e da mesma ligação.
+    `campaigns` é o repositório de campanhas, `segments` um SegmentService, `consents` o
+    repositório de consentimento e `suppressions` o SuppressionService, todos do mesmo backend
+    e da mesma ligação. A lista de supressão é obrigatória: sem ela não se enfileira nada.
     """
 
-    def __init__(self, campaigns, segments, consents, now=utc_now):
+    def __init__(self, campaigns, segments, consents, suppressions, now=utc_now):
+        if suppressions is None:
+            raise ValueError("O enfileiramento exige a lista de supressão.")
         self.campaigns = campaigns
         self.segments = segments
         self.consents = consents
+        self.suppressions = suppressions
         self.now = now
 
     def create_campaign(
@@ -44,9 +48,9 @@ class CampaignService:
         return self.segments.list_segments()
 
     def enqueue(self, campaign_id: int) -> dict[str, int]:
-        """Cria uma mensagem por membro do segmento: pendente se o contacto tem consentimento
-        concedido para a finalidade, ignorada (com motivo) se não tem. O consentimento volta a
-        verificar-se no momento do envio."""
+        """Cria uma mensagem por membro do segmento: pendente se o endereço não está suprimido e
+        o contacto tem consentimento concedido para a finalidade, ignorada (com motivo) se não.
+        A supressão e o consentimento voltam a verificar-se no momento do envio."""
         campaign = self.get_campaign(campaign_id)
         if campaign.status != "draft":
             raise ValidationError("A campanha já foi enfileirada.")
@@ -56,11 +60,14 @@ class CampaignService:
         by_contact: dict[int, list] = {}
         for record in self.consents.list_all():
             by_contact.setdefault(record.contact_id, []).append(record)
+        suppressed = self.suppressions.suppressed_emails()
         pending, skipped = [], []
         for member in members:
             if not member.email:
                 continue
-            if is_eligible(by_contact.get(member.id, ()), campaign.purpose):
+            if member.email in suppressed:
+                skipped.append((member.id, member.email, SKIP_SUPPRESSED))
+            elif is_eligible(by_contact.get(member.id, ()), campaign.purpose):
                 pending.append((member.id, member.email))
             else:
                 skipped.append((member.id, member.email, SKIP_NO_CONSENT))
