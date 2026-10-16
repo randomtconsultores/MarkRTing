@@ -1,7 +1,7 @@
 import psycopg
 from psycopg.rows import dict_row
 
-from .access_schema import POSTGRES_ACCESS_V9
+from .access_schema import POSTGRES_ACCESS_V9, POSTGRES_LOGIN_ATTEMPTS_V10
 from .migrations import Migration, MigrationError, latest_version, pending
 
 BASELINE_VERSION = 2
@@ -131,6 +131,7 @@ MIGRATIONS: list[Migration] = [
     (7, SUPPRESSIONS_V7),
     (8, SUBSCRIPTIONS_V8),
     (9, POSTGRES_ACCESS_V9),
+    (10, POSTGRES_LOGIN_ATTEMPTS_V10),
 ]
 SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 

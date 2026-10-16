@@ -36,6 +36,52 @@ def check_digest(value):
         raise ValueError("Esperado um digest SHA-256 hexadecimal, nao um token de sessao.")
 
 
+@dataclass(frozen=True)
+class LoginAttemptDecision:
+    allowed: bool
+    retry_after: int
+
+
+class _LoginAttemptDenied(Exception):
+    def __init__(self, retry_after):
+        self.retry_after = retry_after
+
+
+_MAX_TIME = 2**63 - 1
+# A v10 publicada usa INTEGER no PostgreSQL; o contrato e igual nos dois motores.
+MAX_LOGIN_ATTEMPTS = 2**31 - 1
+
+
+def validate_login_attempt_reservations(buckets, now, window_seconds):
+    if type(now) is not int or not 0 <= now <= _MAX_TIME:
+        raise ValueError("now tem de ser um segundo Unix valido.")
+    if type(window_seconds) is not int or not 0 < window_seconds <= _MAX_TIME:
+        raise ValueError("window_seconds tem de ser um inteiro positivo valido.")
+    if now + window_seconds > _MAX_TIME:
+        raise ValueError("A expiracao excede o intervalo suportado.")
+    if not isinstance(buckets, (tuple, list)) or not buckets:
+        raise ValueError("E necessario pelo menos um limite de tentativas.")
+
+    checked = []
+    seen = set()
+    for bucket_hash, limit in buckets:
+        check_digest(bucket_hash)
+        if type(limit) is not int or not 0 < limit <= MAX_LOGIN_ATTEMPTS:
+            raise ValueError(f"O limite de tentativas tem de ser um inteiro entre 1 e {MAX_LOGIN_ATTEMPTS}.")
+        if bucket_hash in seen:
+            raise ValueError("Os hashes dos limites de tentativas têm de ser únicos.")
+        seen.add(bucket_hash)
+        checked.append((bucket_hash, limit))
+    return sorted(checked), now + window_seconds
+
+
+def validate_login_attempt_cleanup(now, batch_size):
+    if type(now) is not int or not 0 <= now <= _MAX_TIME:
+        raise ValueError("now tem de ser um segundo Unix valido.")
+    if type(batch_size) is not int or not 1 <= batch_size <= 10000:
+        raise ValueError("batch_size tem de ser um inteiro entre 1 e 10000.")
+
+
 class AccessRepository:
     """Persistencia de acesso; recebe hashes, nunca palavras-passe ou tokens em claro.
 
@@ -127,3 +173,56 @@ class AccessRepository:
     def revoke_user_sessions(self, user_id):
         with self.conn:
             return self.conn.execute("DELETE FROM admin_sessions WHERE user_id = ?", (user_id,)).rowcount
+
+    def reserve_login_attempts(self, buckets, now, window_seconds):
+        """Reserve all supplied budgets atomically or leave every counter unchanged."""
+        buckets, expires_at = validate_login_attempt_reservations(
+            buckets, now, window_seconds
+        )
+        try:
+            with self.conn:
+                retry_afters = []
+                for bucket_hash, limit in buckets:
+                    row = self.conn.execute(
+                        "INSERT INTO admin_login_attempts "
+                        "(bucket_hash, started_at, expires_at, attempts) VALUES (?, ?, ?, 1) "
+                        "ON CONFLICT(bucket_hash) DO UPDATE SET "
+                        "started_at = CASE "
+                        "WHEN admin_login_attempts.expires_at <= excluded.started_at "
+                        "THEN excluded.started_at ELSE admin_login_attempts.started_at END, "
+                        "expires_at = CASE "
+                        "WHEN admin_login_attempts.expires_at <= excluded.started_at "
+                        "THEN excluded.expires_at ELSE admin_login_attempts.expires_at END, "
+                        "attempts = CASE "
+                        "WHEN admin_login_attempts.expires_at <= excluded.started_at "
+                        "THEN 1 ELSE admin_login_attempts.attempts + 1 END "
+                        "WHERE admin_login_attempts.expires_at <= excluded.started_at "
+                        "OR (admin_login_attempts.started_at <= excluded.started_at "
+                        "AND admin_login_attempts.attempts < ?) "
+                        "RETURNING attempts",
+                        (bucket_hash, now, expires_at, limit),
+                    ).fetchone()
+                    if row is None:
+                        stored = self.conn.execute(
+                            "SELECT expires_at FROM admin_login_attempts WHERE bucket_hash = ?",
+                            (bucket_hash,),
+                        ).fetchone()
+                        if stored is None:
+                            raise RuntimeError("O limite de tentativas desapareceu durante a reserva.")
+                        retry_afters.append(max(1, stored["expires_at"] - now))
+                if retry_afters:
+                    raise _LoginAttemptDenied(max(retry_afters))
+        except _LoginAttemptDenied as denied:
+            return LoginAttemptDecision(False, denied.retry_after)
+        return LoginAttemptDecision(True, 0)
+
+    def cleanup_expired_login_attempts(self, now, *, batch_size=1000):
+        """Remove at most one batch; recheck expiry before deleting refreshed rows."""
+        validate_login_attempt_cleanup(now, batch_size)
+        with self.conn:
+            return self.conn.execute(
+                "DELETE FROM admin_login_attempts WHERE bucket_hash IN ("
+                "SELECT bucket_hash FROM admin_login_attempts WHERE expires_at <= ? "
+                "ORDER BY expires_at, bucket_hash LIMIT ?) AND expires_at <= ?",
+                (now, batch_size, now),
+            ).rowcount

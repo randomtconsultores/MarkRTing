@@ -1,6 +1,14 @@
 import psycopg
 
-from .access_repository import check_digest, session_record, user_record
+from .access_repository import (
+    LoginAttemptDecision,
+    _LoginAttemptDenied,
+    check_digest,
+    session_record,
+    user_record,
+    validate_login_attempt_cleanup,
+    validate_login_attempt_reservations,
+)
 
 
 class PostgresAccessRepository:
@@ -94,3 +102,56 @@ class PostgresAccessRepository:
     def revoke_user_sessions(self, user_id):
         with self.conn.transaction():
             return self.conn.execute("DELETE FROM admin_sessions WHERE user_id = %s", (user_id,)).rowcount
+
+    def reserve_login_attempts(self, buckets, now, window_seconds):
+        """Reserve all supplied budgets atomically or leave every counter unchanged."""
+        buckets, expires_at = validate_login_attempt_reservations(
+            buckets, now, window_seconds
+        )
+        try:
+            with self.conn.transaction():
+                retry_afters = []
+                for bucket_hash, limit in buckets:
+                    row = self.conn.execute(
+                        "INSERT INTO admin_login_attempts "
+                        "(bucket_hash, started_at, expires_at, attempts) VALUES (%s, %s, %s, 1) "
+                        "ON CONFLICT(bucket_hash) DO UPDATE SET "
+                        "started_at = CASE "
+                        "WHEN admin_login_attempts.expires_at <= EXCLUDED.started_at "
+                        "THEN EXCLUDED.started_at ELSE admin_login_attempts.started_at END, "
+                        "expires_at = CASE "
+                        "WHEN admin_login_attempts.expires_at <= EXCLUDED.started_at "
+                        "THEN EXCLUDED.expires_at ELSE admin_login_attempts.expires_at END, "
+                        "attempts = CASE "
+                        "WHEN admin_login_attempts.expires_at <= EXCLUDED.started_at "
+                        "THEN 1 ELSE admin_login_attempts.attempts + 1 END "
+                        "WHERE admin_login_attempts.expires_at <= EXCLUDED.started_at "
+                        "OR (admin_login_attempts.started_at <= EXCLUDED.started_at "
+                        "AND admin_login_attempts.attempts < %s) "
+                        "RETURNING attempts",
+                        (bucket_hash, now, expires_at, limit),
+                    ).fetchone()
+                    if row is None:
+                        stored = self.conn.execute(
+                            "SELECT expires_at FROM admin_login_attempts WHERE bucket_hash = %s",
+                            (bucket_hash,),
+                        ).fetchone()
+                        if stored is None:
+                            raise RuntimeError("O limite de tentativas desapareceu durante a reserva.")
+                        retry_afters.append(max(1, stored["expires_at"] - now))
+                if retry_afters:
+                    raise _LoginAttemptDenied(max(retry_afters))
+        except _LoginAttemptDenied as denied:
+            return LoginAttemptDecision(False, denied.retry_after)
+        return LoginAttemptDecision(True, 0)
+
+    def cleanup_expired_login_attempts(self, now, *, batch_size=1000):
+        """Remove at most one batch; recheck expiry before deleting refreshed rows."""
+        validate_login_attempt_cleanup(now, batch_size)
+        with self.conn.transaction():
+            return self.conn.execute(
+                "DELETE FROM admin_login_attempts WHERE bucket_hash IN ("
+                "SELECT bucket_hash FROM admin_login_attempts WHERE expires_at <= %s "
+                "ORDER BY expires_at, bucket_hash LIMIT %s) AND expires_at <= %s",
+                (now, batch_size, now),
+            ).rowcount

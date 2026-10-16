@@ -1,4 +1,4 @@
-"""DDL de acesso da migração v9, para SQLite e PostgreSQL.
+"""DDL de acesso das migracoes v9 e v10, para SQLite e PostgreSQL.
 
 Tempos são segundos Unix UTC, fornecidos pela aplicação. Segredos de sessão
 não são persistidos: token_hash recebe o digest SHA-256 hexadecimal.
@@ -41,3 +41,28 @@ POSTGRES_ACCESS_V9 = (
     + ");\n"
     + _SESSION_DDL
 )
+
+SQLITE_LOGIN_ATTEMPTS_V10 = """
+CREATE TABLE admin_login_attempts (
+    bucket_hash TEXT PRIMARY KEY NOT NULL
+        CHECK (length(bucket_hash) = 64 AND bucket_hash = lower(bucket_hash)
+               AND bucket_hash NOT GLOB '*[^0-9a-f]*'),
+    started_at INTEGER NOT NULL
+        CHECK (typeof(started_at) = 'integer' AND started_at >= 0),
+    expires_at INTEGER NOT NULL
+        CHECK (typeof(expires_at) = 'integer' AND expires_at > started_at),
+    attempts INTEGER NOT NULL
+        CHECK (typeof(attempts) = 'integer' AND attempts > 0)
+);
+CREATE INDEX ix_admin_login_attempts_expiry ON admin_login_attempts (expires_at);
+"""
+
+POSTGRES_LOGIN_ATTEMPTS_V10 = """
+CREATE TABLE admin_login_attempts (
+    bucket_hash TEXT PRIMARY KEY NOT NULL CHECK (bucket_hash ~ '^[0-9a-f]{64}$'),
+    started_at BIGINT NOT NULL CHECK (started_at >= 0),
+    expires_at BIGINT NOT NULL CHECK (expires_at > started_at),
+    attempts INTEGER NOT NULL CHECK (attempts > 0)
+);
+CREATE INDEX ix_admin_login_attempts_expiry ON admin_login_attempts (expires_at);
+"""

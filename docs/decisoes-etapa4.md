@@ -41,3 +41,15 @@ Importação/exportação, remoção/anonimização, retenção geral, remoção
 - OWASP Password Storage Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
 - OWASP Session Management Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html
 - OWASP Authentication Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
+
+## Ajustes ao limitador — 16 de outubro de 2026
+
+Ramo deste incremento: feat/etapa4-protecao-administrativa. A proposta inicial acima e historica; esta secao regista os ajustes posteriores ao incremento 2/3, sem declarar a integracao web concluida.
+
+- Chave HMAC: LoginAttemptConfig usa field(repr=False) para excluir hmac_key da representacao automatica. Isto nao protege serializacoes explicitas, asdict ou logs manuais: o segredo continua a exigir cuidado operacional.
+- Intervalo: a v10 ja publicada usa INTEGER para attempts no PostgreSQL. Em vez de reescrever uma migracao aplicada ou introduzir uma nova migracao apenas para admitir orcamentos superiores a dois mil milhoes, a configuracao e a reserva passam a aceitar limites entre 1 e 2147483647, iguais nos dois motores. O teto e uma restricao tecnica, nao um valor de producao predefinido. Tempos e duracao da janela mantem o intervalo de 64 bits. Nao ha alteracao de esquema nem transformacao de dados existentes.
+- Limpeza: cleanup_expired_login_attempts(now, batch_size=1000) e cleanup_expired(now=..., batch_size=1000) processam um lote por chamada, com tamanho entre 1 e 10000. batch_size e keyword-only; as chamadas antigas com apenas now continuam validas, mas deixam de prometer remover todos os expirados numa unica execucao. A selecao ordena por expires_at e bucket_hash e o DELETE revalida a expiracao na condicao externa. O limite controla linhas eliminadas, nao garante tempo maximo da consulta. O operador deve agendar novas chamadas limitadas enquanto houver trabalho; nao ha eliminacao automatica apenas por expirar.
+
+Verificacao deste ajuste: 33 casos aprovados em 0,25 s com SQLite real em ficheiro e o DDL v10 existente, num pacote temporario com fixture minima. Inclui os novos casos focados e os testes existentes de test_login_attempt_limiter.py conferidos pelo hash Git, incluindo 12 ligacoes concorrentes. Nao foi carregada a fixture completa do projeto; PostgreSQL, concorrencia de limpeza com renovacao simultanea e a suite completa nao foram executados aqui. A preservacao de um bucket renovado foi testada sequencialmente. Os 1550 testes reportados antes destes ajustes nao validam esta nova versao.
+
+Validacao focada no ambiente do projeto, com MINI_MARKETO_TEST_PG configurada para testes: .venv/bin/python -m pytest -q -rs tests/test_login_attempt_hardening.py tests/test_login_attempt_limiter.py. A integracao web 3/3 e a conclusao global da etapa 4 continuam pendentes.
