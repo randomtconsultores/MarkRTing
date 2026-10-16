@@ -3,10 +3,10 @@ import psycopg
 from .access_repository import (
     LoginAttemptDecision,
     _LoginAttemptDenied,
-    _MAX_TIME,
     check_digest,
     session_record,
     user_record,
+    validate_login_attempt_cleanup,
     validate_login_attempt_reservations,
 )
 
@@ -145,10 +145,13 @@ class PostgresAccessRepository:
             return LoginAttemptDecision(False, denied.retry_after)
         return LoginAttemptDecision(True, 0)
 
-    def cleanup_expired_login_attempts(self, now):
-        if type(now) is not int or not 0 <= now <= _MAX_TIME:
-            raise ValueError("now tem de ser um segundo Unix valido.")
+    def cleanup_expired_login_attempts(self, now, *, batch_size=1000):
+        """Remove at most one batch; recheck expiry before deleting refreshed rows."""
+        validate_login_attempt_cleanup(now, batch_size)
         with self.conn.transaction():
             return self.conn.execute(
-                "DELETE FROM admin_login_attempts WHERE expires_at <= %s", (now,)
+                "DELETE FROM admin_login_attempts WHERE bucket_hash IN ("
+                "SELECT bucket_hash FROM admin_login_attempts WHERE expires_at <= %s "
+                "ORDER BY expires_at, bucket_hash LIMIT %s) AND expires_at <= %s",
+                (now, batch_size, now),
             ).rowcount

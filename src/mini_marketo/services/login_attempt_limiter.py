@@ -6,7 +6,9 @@ import ipaddress
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from mini_marketo.repositories.access_repository import MAX_LOGIN_ATTEMPTS
 
 _MAX_TIME = 2**63 - 1
 _KEY_MIN_BYTES = 32
@@ -14,15 +16,15 @@ _CONTEXT = b"mini-marketo:admin-login-attempt:v1\x00"
 _POSITIVE_INTEGER = re.compile(r"[0-9]+")
 
 
-def _positive(value, name):
-    if type(value) is not int or not 0 < value <= _MAX_TIME:
-        raise ValueError(f"{name} tem de ser um inteiro positivo valido.")
+def _positive(value, name, maximum=_MAX_TIME):
+    if type(value) is not int or not 0 < value <= maximum:
+        raise ValueError(f"{name} tem de ser um inteiro positivo valido (maximo {maximum}).")
     return value
 
 
 @dataclass(frozen=True)
 class LoginAttemptConfig:
-    hmac_key: bytes
+    hmac_key: bytes = field(repr=False)
     window_seconds: int
     account_limit: int
     ip_limit: int
@@ -32,9 +34,9 @@ class LoginAttemptConfig:
         if not isinstance(self.hmac_key, bytes) or len(self.hmac_key) < _KEY_MIN_BYTES:
             raise ValueError("A chave HMAC tem de conter pelo menos 32 bytes.")
         _positive(self.window_seconds, "window_seconds")
-        _positive(self.account_limit, "account_limit")
-        _positive(self.ip_limit, "ip_limit")
-        _positive(self.installation_limit, "installation_limit")
+        _positive(self.account_limit, "account_limit", MAX_LOGIN_ATTEMPTS)
+        _positive(self.ip_limit, "ip_limit", MAX_LOGIN_ATTEMPTS)
+        _positive(self.installation_limit, "installation_limit", MAX_LOGIN_ATTEMPTS)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "LoginAttemptConfig":
@@ -100,8 +102,8 @@ class LoginAttemptLimiter:
             buckets, now, self.config.window_seconds
         )
 
-    def cleanup_expired(self, *, now: int) -> int:
-        return self.repo.cleanup_expired_login_attempts(now)
+    def cleanup_expired(self, *, now: int, batch_size: int = 1000) -> int:
+        return self.repo.cleanup_expired_login_attempts(now, batch_size=batch_size)
 
     def _bucket_hash(self, scope: str, subject: bytes) -> str:
         scope_bytes = scope.encode("ascii")

@@ -48,6 +48,8 @@ class _LoginAttemptDenied(Exception):
 
 
 _MAX_TIME = 2**63 - 1
+# A v10 publicada usa INTEGER no PostgreSQL; o contrato e igual nos dois motores.
+MAX_LOGIN_ATTEMPTS = 2**31 - 1
 
 
 def validate_login_attempt_reservations(buckets, now, window_seconds):
@@ -64,13 +66,20 @@ def validate_login_attempt_reservations(buckets, now, window_seconds):
     seen = set()
     for bucket_hash, limit in buckets:
         check_digest(bucket_hash)
-        if type(limit) is not int or not 0 < limit <= _MAX_TIME:
-            raise ValueError("O limite de tentativas tem de ser um inteiro positivo valido.")
+        if type(limit) is not int or not 0 < limit <= MAX_LOGIN_ATTEMPTS:
+            raise ValueError(f"O limite de tentativas tem de ser um inteiro entre 1 e {MAX_LOGIN_ATTEMPTS}.")
         if bucket_hash in seen:
             raise ValueError("Os hashes dos limites de tentativas têm de ser únicos.")
         seen.add(bucket_hash)
         checked.append((bucket_hash, limit))
     return sorted(checked), now + window_seconds
+
+
+def validate_login_attempt_cleanup(now, batch_size):
+    if type(now) is not int or not 0 <= now <= _MAX_TIME:
+        raise ValueError("now tem de ser um segundo Unix valido.")
+    if type(batch_size) is not int or not 1 <= batch_size <= 10000:
+        raise ValueError("batch_size tem de ser um inteiro entre 1 e 10000.")
 
 
 class AccessRepository:
@@ -207,10 +216,13 @@ class AccessRepository:
             return LoginAttemptDecision(False, denied.retry_after)
         return LoginAttemptDecision(True, 0)
 
-    def cleanup_expired_login_attempts(self, now):
-        if type(now) is not int or not 0 <= now <= _MAX_TIME:
-            raise ValueError("now tem de ser um segundo Unix valido.")
+    def cleanup_expired_login_attempts(self, now, *, batch_size=1000):
+        """Remove at most one batch; recheck expiry before deleting refreshed rows."""
+        validate_login_attempt_cleanup(now, batch_size)
         with self.conn:
             return self.conn.execute(
-                "DELETE FROM admin_login_attempts WHERE expires_at <= ?", (now,)
+                "DELETE FROM admin_login_attempts WHERE bucket_hash IN ("
+                "SELECT bucket_hash FROM admin_login_attempts WHERE expires_at <= ? "
+                "ORDER BY expires_at, bucket_hash LIMIT ?) AND expires_at <= ?",
+                (now, batch_size, now),
             ).rowcount
