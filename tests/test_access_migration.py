@@ -71,8 +71,9 @@ def seed_existing_data(db):
 
 @pytest.fixture
 def v8_db(db):
-    assert db.module.SCHEMA_VERSION == 9, "Aplique a integração v9 antes destes testes."
+    assert db.module.SCHEMA_VERSION == 10, "Aplique a integração v10 antes destes testes."
     assert any(version == 9 for version, _ in db.module.MIGRATIONS)
+    assert any(version == 10 for version, _ in db.module.MIGRATIONS)
     db.set_version(8)
     assert db.version() == 8
     seed_existing_data(db)
@@ -84,9 +85,10 @@ def test_v9_preserves_existing_data_and_reopens(v8_db):
     before = snapshot(db)
     again = db.reopen()
     try:
-        assert again.version() == 9
+        assert again.version() == 10
         assert again.scalar("SELECT count(*) FROM admin_users") == 0
         assert again.scalar("SELECT count(*) FROM admin_sessions") == 0
+        assert again.scalar("SELECT count(*) FROM admin_login_attempts") == 0
         assert snapshot(again) == before
         # Apenas dados de teste de esquema; nao e um hash utilizavel para login.
         again.execute(
@@ -107,9 +109,10 @@ def test_v9_preserves_existing_data_and_reopens(v8_db):
         again.close()
     reopened = db.reopen()
     try:
-        assert reopened.version() == 9
+        assert reopened.version() == 10
         assert reopened.scalar("SELECT count(*) FROM admin_users") == 1
         assert reopened.scalar("SELECT count(*) FROM admin_sessions") == 1
+        assert reopened.scalar("SELECT count(*) FROM admin_login_attempts") == 0
         assert tuple(reopened.execute("SELECT * FROM admin_users").fetchone()) == user_row
         assert tuple(reopened.execute("SELECT * FROM admin_sessions").fetchone()) == session_row
         assert snapshot(reopened) == before
@@ -136,13 +139,15 @@ def test_v9_failure_rolls_back_tables_and_version(v8_db, monkeypatch):
     if db.kind == "sqlite":
         assert db.scalar(
             "SELECT count(*) FROM sqlite_master WHERE type = 'table' "
-            "AND name IN ('admin_users', 'admin_sessions')"
+            "AND name IN ('admin_users', 'admin_sessions', 'admin_login_attempts')"
         ) == 0
     else:
         assert db.scalar("SELECT to_regclass('admin_users') IS NULL")
         assert db.scalar("SELECT to_regclass('admin_sessions') IS NULL")
+        assert db.scalar("SELECT to_regclass('admin_login_attempts') IS NULL")
     db.module.init_db(db.conn)
-    assert db.version() == 9
+    assert db.version() == 10
     assert db.scalar("SELECT count(*) FROM admin_users") == 0
     assert db.scalar("SELECT count(*) FROM admin_sessions") == 0
+    assert db.scalar("SELECT count(*) FROM admin_login_attempts") == 0
     assert snapshot(db) == before

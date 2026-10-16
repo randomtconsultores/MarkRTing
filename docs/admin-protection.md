@@ -23,7 +23,21 @@ Importante: este commit nao instala a matriz na aplicacao. Nao ha ainda middlewa
 
 ## 2/3 — Tentativas persistentes
 
-Implementar migracao, repositorios SQLite/PostgreSQL, reserva atomica de tentativas antes do hashing e limpeza. Definir configuracao explicita e testar concorrencia e falhas; nao depender de contador em memoria. Identificadores usados na persistencia devem minimizar exposicao de dados pessoais. O segundo commit nao pode expor login antes do terceiro.
+A migracao v10 adiciona `admin_login_attempts`, sem alterar dados das tabelas existentes. Os repositorios SQLite e PostgreSQL reservam, numa unica transacao, os limites por conta, endereco IP e instalacao. Se algum limite recusar, as reservas parciais da tentativa sao revertidas. A reserva usa UPSERT condicional, nao uma leitura seguida de incremento; contadores saturados nao aumentam e uma janela expirada pode comecar de novo. `cleanup_expired_login_attempts(now)` remove linhas expiradas.
+
+`LoginAttemptLimiter` exige `LoginAttemptConfig` explicita. `LoginAttemptConfig.from_env()` exige todas estas variaveis, sem limites por omissao:
+
+| Variavel | Significado |
+| --- | --- |
+| `MINI_MARKETO_LOGIN_ATTEMPT_HMAC_KEY` | Chave secreta independente, com pelo menos 32 bytes UTF-8 |
+| `MINI_MARKETO_LOGIN_ATTEMPT_WINDOW_SECONDS` | Duracao positiva da janela |
+| `MINI_MARKETO_LOGIN_ATTEMPT_ACCOUNT_LIMIT` | Tentativas maximas por conta normalizada |
+| `MINI_MARKETO_LOGIN_ATTEMPT_IP_LIMIT` | Tentativas maximas por endereco IP |
+| `MINI_MARKETO_LOGIN_ATTEMPT_INSTALLATION_LIMIT` | Tentativas maximas para a instalacao |
+
+Todos os processos da mesma instalacao devem usar a mesma base de dados, chave HMAC e valores de configuracao. Gere e distribua a chave como segredo operacional; nao reutilize as chaves de CSRF, cancelamento ou subscricao. Os identificadores persistidos sao HMAC-SHA256 com contexto e ambito separados; username e IP nao sao guardados em claro. A normalizacao do username so e aplicada ao identificador do orcamento: a autenticacao deve receber o valor original. A limpeza pode ser agendada pelo operador, chamando o metodo do repositorio/servico com o tempo Unix atual.
+
+Este commit nao liga o limitador ao `AuthenticationService` nem expoe login. A reserva deve ser chamada antes do hashing quando ocorrer a integracao web, no terceiro commit.
 
 ## 3/3 — Integracao web
 
