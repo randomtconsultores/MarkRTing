@@ -1,4 +1,4 @@
-"""DDL preparatório de acesso; ainda não registado nas migrações.
+"""DDL de acesso da migração v9, para SQLite e PostgreSQL.
 
 Tempos são segundos Unix UTC, fornecidos pela aplicação. Segredos de sessão
 não são persistidos: token_hash recebe o digest SHA-256 hexadecimal.

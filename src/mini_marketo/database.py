@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 
+from .access_schema import SQLITE_ACCESS_V9
 from .migrations import Migration, MigrationError, latest_version, pending
 
 BASELINE_VERSION = 2
@@ -141,6 +142,7 @@ MIGRATIONS: list[Migration] = [
     (6, CONSENT_SOURCE_V6),
     (7, SUPPRESSIONS_V7),
     (8, SUBSCRIPTIONS_V8),
+    (9, SQLITE_ACCESS_V9),
 ]
 SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
 

@@ -1,18 +1,12 @@
-"""Testes do DDL preparatório, sem alterar a versão das migrações existentes."""
+"""Restrições de acesso verificadas sobre o esquema criado pelas migrações."""
 
 import hashlib
 
 import pytest
 
-from mini_marketo.access_schema import POSTGRES_ACCESS_V9, SQLITE_ACCESS_V9
-
 
 @pytest.fixture
 def access_db(db):
-    script = SQLITE_ACCESS_V9 if db.kind == "sqlite" else POSTGRES_ACCESS_V9
-    for statement in script.split(";"):
-        if statement.strip():
-            db.execute(statement)
     return db
 
 

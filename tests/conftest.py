@@ -19,6 +19,7 @@ from mini_marketo.services.segment_service import SegmentService
 LATER_TABLES = {
     7: ["suppressions"],
     8: ["subscription_request_purposes", "subscription_requests"],
+    9: ["admin_sessions", "admin_users"],
 }
 
 
