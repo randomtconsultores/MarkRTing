@@ -65,6 +65,27 @@ class PostgresAccessRepository:
             (token_hash, now, now, now - idle_seconds),
         ).fetchone())
 
+    def touch_valid_session(self, token_hash, now, idle_seconds):
+        """Refresh only a currently valid session, never resurrect or extend it."""
+        check_digest(token_hash)
+        if type(now) is not int or not 0 <= now <= 2**63 - 1:
+            raise ValueError("now tem de ser um segundo Unix valido.")
+        if type(idle_seconds) is not int or not 0 < idle_seconds <= 2**63 - 1:
+            raise ValueError("idle_seconds tem de ser um inteiro positivo valido.")
+        with self.conn.transaction():
+            cur = self.conn.execute(
+                "UPDATE admin_sessions SET last_seen_at = %s "
+                "WHERE token_hash = %s AND expires_at > %s "
+                "AND last_seen_at <= %s AND last_seen_at > %s "
+                "AND EXISTS (SELECT 1 FROM admin_users u "
+                "WHERE u.id = admin_sessions.user_id AND u.is_active = 1 "
+                "AND u.credential_version = admin_sessions.credential_version)",
+                (now, token_hash, now, now, now - idle_seconds),
+            )
+            if cur.rowcount != 1:
+                return None
+            return self.get_valid_session(token_hash, now, idle_seconds)
+
     def revoke_session(self, token_hash):
         check_digest(token_hash)
         with self.conn.transaction():
