@@ -1,0 +1,68 @@
+diff --git a/src/mini_marketo/database.py b/src/mini_marketo/database.py
+--- a/src/mini_marketo/database.py
++++ b/src/mini_marketo/database.py
+@@ -1,4 +1,5 @@
+ import sqlite3
+ from pathlib import Path
+ 
++from .access_schema import SQLITE_ACCESS_V9
+ from .migrations import Migration, MigrationError, latest_version, pending
+@@ -170,4 +171,5 @@
+     (7, SUPPRESSIONS_V7),
+     (8, SUBSCRIPTIONS_V8),
++    (9, SQLITE_ACCESS_V9),
+ ]
+ SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
+diff --git a/src/mini_marketo/postgres_database.py b/src/mini_marketo/postgres_database.py
+--- a/src/mini_marketo/postgres_database.py
++++ b/src/mini_marketo/postgres_database.py
+@@ -1,4 +1,5 @@
+ import psycopg
+ from psycopg.rows import dict_row
+ 
++from .access_schema import POSTGRES_ACCESS_V9
+ from .migrations import Migration, MigrationError, latest_version, pending
+@@ -170,4 +171,5 @@
+     (7, SUPPRESSIONS_V7),
+     (8, SUBSCRIPTIONS_V8),
++    (9, POSTGRES_ACCESS_V9),
+ ]
+ SCHEMA_VERSION = latest_version(BASELINE_VERSION, MIGRATIONS)
+diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,3 +1,4 @@
+     7: ["suppressions"],
+     8: ["subscription_request_purposes", "subscription_requests"],
++    9: ["admin_sessions", "admin_users"],
+ }
+diff --git a/src/mini_marketo/access_schema.py b/src/mini_marketo/access_schema.py
+--- a/src/mini_marketo/access_schema.py
++++ b/src/mini_marketo/access_schema.py
+@@ -1,4 +1,4 @@
+-"""DDL preparatório de acesso; ainda não registado nas migrações.
++"""DDL de acesso da migração v9, para SQLite e PostgreSQL.
+ 
+ Tempos são segundos Unix UTC, fornecidos pela aplicação. Segredos de sessão
+ não são persistidos: token_hash recebe o digest SHA-256 hexadecimal.
+diff --git a/tests/test_access_schema.py b/tests/test_access_schema.py
+--- a/tests/test_access_schema.py
++++ b/tests/test_access_schema.py
+@@ -1,16 +1,10 @@
+-"""Testes do DDL preparatório, sem alterar a versão das migrações existentes."""
++"""Restrições de acesso verificadas sobre o esquema criado pelas migrações."""
+ 
+ import hashlib
+ 
+ import pytest
+ 
+-from mini_marketo.access_schema import POSTGRES_ACCESS_V9, SQLITE_ACCESS_V9
+-
+ 
+ @pytest.fixture
+ def access_db(db):
+-    script = SQLITE_ACCESS_V9 if db.kind == "sqlite" else POSTGRES_ACCESS_V9
+-    for statement in script.split(";"):
+-        if statement.strip():
+-            db.execute(statement)
+     return db
