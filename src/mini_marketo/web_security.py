@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import os
 import re
 import secrets
 from urllib.parse import urlsplit
@@ -86,6 +87,38 @@ class WebSecurityConfig:
         if self.idle_seconds > self.absolute_seconds or self.csrf_seconds > self.absolute_seconds:
             raise ValueError("Duracoes incompativeis.")
         object.__setattr__(self, "origin", origin)
+
+    @classmethod
+    def from_env(cls, env=None):
+        """Load trusted deployment policy, without generating secrets or enabling routes."""
+        env = os.environ if env is None else env
+        names = {
+            "origin": "MINI_MARKETO_ADMIN_ORIGIN",
+            "csrf_key": "MINI_MARKETO_ADMIN_CSRF_KEY",
+            "absolute_seconds": "MINI_MARKETO_ADMIN_SESSION_ABSOLUTE_SECONDS",
+            "idle_seconds": "MINI_MARKETO_ADMIN_SESSION_IDLE_SECONDS",
+            "csrf_seconds": "MINI_MARKETO_ADMIN_CSRF_SECONDS",
+        }
+        values = {}
+        for name, variable in names.items():
+            raw = env.get(variable)
+            if not isinstance(raw, str) or not raw:
+                raise ValueError(f"{variable} e obrigatoria e tem de ser texto.")
+            if name == "origin":
+                values[name] = raw
+            elif name == "csrf_key":
+                try:
+                    values[name] = raw.encode("utf-8")
+                except UnicodeEncodeError:
+                    raise ValueError(f"{variable} tem de ser UTF-8 valido.") from None
+            else:
+                if re.fullmatch(r"[0-9]{1,19}", raw) is None:
+                    raise ValueError(f"{variable} tem de ser um inteiro positivo em segundos.")
+                values[name] = int(raw)
+        local = env.get("MINI_MARKETO_ADMIN_ALLOW_HTTP_LOCAL", "0")
+        if local not in ("0", "1"):
+            raise ValueError("MINI_MARKETO_ADMIN_ALLOW_HTTP_LOCAL aceita apenas 0 ou 1.")
+        return cls(**values, allow_http_local=local == "1")
 
     @property
     def secure(self):
