@@ -49,3 +49,23 @@ Fontes tecnicas:
 - https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 - https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html
 - https://starlette.dev/responses/
+
+## Carregamento do ambiente — integracao web, incremento inicial
+
+WebSecurityConfig.from_env() carrega os.environ; from_env(mapping) usa apenas o mapping fornecido, sem procurar valores em falta no ambiente do processo. As cinco variaveis seguintes sao obrigatorias e nao tem valores por omissao:
+
+| Variavel | Conteudo |
+| --- | --- |
+| MINI_MARKETO_ADMIN_ORIGIN | Origem administrativa HTTPS confiavel, sem caminho, query ou fragmento |
+| MINI_MARKETO_ADMIN_CSRF_KEY | Segredo independente, codificado em UTF-8, com pelo menos 32 bytes |
+| MINI_MARKETO_ADMIN_SESSION_ABSOLUTE_SECONDS | Duracao absoluta positiva da sessao, em segundos |
+| MINI_MARKETO_ADMIN_SESSION_IDLE_SECONDS | Limite positivo de inatividade, nao superior a duracao absoluta |
+| MINI_MARKETO_ADMIN_CSRF_SECONDS | Validade positiva do CSRF, nao superior a duracao absoluta |
+
+MINI_MARKETO_ADMIN_ALLOW_HTTP_LOCAL e opcional: ausente ou 0 mantem a excecao desativada; apenas 1 permite HTTP nos hosts locais literais ja aceites por WebSecurityConfig. Outros valores sao erros, incluindo true/false. HTTPS com a excecao ligada tambem e recusado. Duracoes aceitam apenas algarismos ASCII (ate 19), sem sinais, espacos ou notacao exponencial, e continuam sujeitas ao intervalo e relacoes validados pelo construtor.
+
+A chave nao e aparada, gerada ou persistida pelo carregador. O operador deve fornecer um segredo aleatorio adequado e mantido fora do Git; o comprimento minimo nao prova entropia. Erros nao reproduzem o valor da chave. A configuracao do limitador permanece separada, em LoginAttemptConfig.from_env(); a composicao web tera de usar ambas e respeitar a independencia das chaves.
+
+Verificacao deste incremento: 30 casos aprovados em 0,04 s, num pacote temporario com o modulo real, cuja base foi conferida pelo hash Git e6cc44969f474ee8ebcbef1d9d918b26ccf416c0. Cobertos valores obrigatorios, duracoes invalidas/incompativeis, excecao local, chave UTF-8, representacao sem segredo, leitura de os.environ e mapping explicito, nomes de cookies e contrato CSRF existente. Nao foram executados os testes HTTP, a suite completa, SQLite ou PostgreSQL neste incremento.
+
+Este carregador ainda nao e chamado pela fabrica da aplicacao: nao altera main.py nem instala rotas, middleware ou tokens nos formularios. E preparacao para a integracao web, nao a conclusao do 3/3. No ambiente do projeto, validar de forma focada com .venv/bin/python -m pytest -q -rs tests/test_web_security_env.py tests/test_web_security.py tests/test_web_security_cookies.py.
