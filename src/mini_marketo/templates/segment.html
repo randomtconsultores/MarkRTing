@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ segment.name }} · Mini-Marketo{% endblock %}
 {% block content %}
+{% from "_admin_security.html" import csrf_field %}
+{% set can_mutate = admin_access and admin_access.role == 'admin' and admin_access.admin_csrf_token %}
 <div class="page-intro">
   <p><a href="/segments">← Segmentos</a></p>
   <p class="eyebrow">A sua audiência</p>
@@ -16,10 +18,13 @@
   {% endfor %}
   </ul>
   <p class="hint">Pertencer a um segmento não é autorização para comunicar: a elegibilidade verifica-se à parte, pelo consentimento concedido e não retirado da finalidade.</p>
-  <p><a href="/segments/{{ segment.id }}/edit">Editar</a></p>
+  {% if can_mutate %}<p><a href="/segments/{{ segment.id }}/edit">Editar</a></p>{% endif %}
+  {% if can_mutate %}
   <form method="post" action="/segments/{{ segment.id }}/delete" class="inline">
+    {{ csrf_field(admin_access.admin_csrf_token) }}
     <button class="button-danger">Apagar segmento</button>
   </form>
+  {% endif %}
 </section>
 
 <section class="panel" aria-labelledby="segment-members-title">

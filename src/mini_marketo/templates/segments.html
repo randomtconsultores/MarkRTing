@@ -5,7 +5,9 @@
 
 <section>
   <h2>Novo segmento</h2>
+  {% if admin_access and admin_access.role == 'admin' and admin_access.admin_csrf_token %}
   {% include "_segment_form.html" %}
+  {% endif %}
 </section>
 
 <section>
