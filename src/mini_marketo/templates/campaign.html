@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ campaign.name }} · Mini-Marketo{% endblock %}
 {% block content %}
+{% from "_admin_security.html" import csrf_field %}
+{% set can_mutate = admin_access and admin_access.role == 'admin' and admin_access.admin_csrf_token %}
 <div class="page-intro">
   <p><a href="/campaigns">← Campanhas</a></p>
   <p class="eyebrow">Comunicação</p>
@@ -11,9 +13,10 @@
   <h2 id="campaign-summary-title">Resumo da campanha</h2>
   <p>Assunto: {{ campaign.subject }}</p>
   <p>Segmento: {{ campaign.segment_name }}{% if campaign.segment_id is none %} (já não existe){% endif %} · Finalidade: {{ purposes[campaign.purpose] }} · Estado: {{ statuses[campaign.status] }}</p>
-  {% if campaign.status == 'draft' %}
+  {% if campaign.status == 'draft' and can_mutate %}
   <h3>Preparar envio</h3>
   <form method="post" action="/campaigns/{{ campaign.id }}/enqueue" class="inline">
+    {{ csrf_field(admin_access.admin_csrf_token) }}
     <button>Enfileirar envio</button>
   </form>
   <p class="hint">Enfileirar cria uma mensagem por membro do segmento: pendente se há consentimento concedido para a finalidade, ignorada se não há. O envio é feito pelo processo de envio (send_worker), não por esta página, e o consentimento volta a verificar-se na altura do envio.</p>

@@ -21,9 +21,12 @@
   </table>
 </section>
 
+{% if admin_access and admin_access.role == 'admin' and admin_access.admin_csrf_token %}
 <section>
   <h2>Nova campanha</h2>
   <form method="post" action="/campaigns">
+    {% from "_admin_security.html" import csrf_field %}
+    {{ csrf_field(admin_access.admin_csrf_token) }}
     <label>Nome <input name="name" value="{{ form.name }}" maxlength="100" required></label>
     <label>Assunto <input name="subject" value="{{ form.subject }}" maxlength="200" required></label>
     <label>Segmento
@@ -46,4 +49,5 @@
     <button>Guardar rascunho</button>
   </form>
 </section>
+{% endif %}
 {% endblock %}
