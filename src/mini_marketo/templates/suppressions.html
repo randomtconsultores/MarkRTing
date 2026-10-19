@@ -7,21 +7,26 @@
   <p>Um endereço suprimido não recebe nenhum envio, seja qual for a finalidade ou o consentimento. Os bounces permanentes e as queixas entram automaticamente e não podem ser removidos aqui; só as supressões manuais.</p>
 </div>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% from "_admin_security.html" import csrf_field %}
+{% set can_mutate = admin_access and admin_access.role == 'admin' and admin_access.admin_csrf_token %}
 
+{% if can_mutate %}
 <section class="panel page-intro" aria-labelledby="suppression-form-title">
   <h2 id="suppression-form-title">Suprimir um endereço</h2>
   <form method="post" action="/suppressions" class="contact-form">
+    {{ csrf_field(admin_access.admin_csrf_token) }}
     <label>Email <input type="email" name="email" value="{{ form.email or '' }}" required></label>
     <label>Nota <input name="detail" value="{{ form.detail or '' }}" maxlength="500"></label>
     <button>Suprimir</button>
   </form>
 </section>
+{% endif %}
 
 <section class="panel" aria-labelledby="suppression-list-title">
   <h2 id="suppression-list-title">Lista ({{ suppressions|length }})</h2>
   <div class="table-scroll" role="region" aria-label="Lista de endereços suprimidos" tabindex="0">
   <table>
-    <thead><tr><th scope="col">Data (UTC)</th><th scope="col">Email</th><th scope="col">Motivo</th><th scope="col">Origem</th><th scope="col">Detalhe</th><th scope="col">Ações</th></tr></thead>
+    <thead><tr><th scope="col">Data (UTC)</th><th scope="col">Email</th><th scope="col">Motivo</th><th scope="col">Origem</th><th scope="col">Detalhe</th>{% if can_mutate %}<th scope="col">Ações</th>{% endif %}</tr></thead>
     <tbody>
     {% for s in suppressions %}
       <tr>
@@ -30,17 +35,18 @@
         <td><span class="badge badge-{{ s.reason }}">{{ reasons[s.reason] }}</span></td>
         <td>{{ sources[s.source] }}</td>
         <td>{{ s.detail }}</td>
-        <td>
+        {% if can_mutate %}<td>
           {% if s.reason in removable %}
           <form method="post" action="/suppressions/remove">
+            {{ csrf_field(admin_access.admin_csrf_token) }}
             <input type="hidden" name="email" value="{{ s.email }}">
             <button class="button-secondary">Remover</button>
           </form>
           {% endif %}
-        </td>
+        </td>{% endif %}
       </tr>
     {% else %}
-      <tr><td colspan="6" class="empty-state">Ainda não há endereços suprimidos.</td></tr>
+      <tr><td colspan="{{ 6 if can_mutate else 5 }}" class="empty-state">Ainda não há endereços suprimidos.</td></tr>
     {% endfor %}
     </tbody>
   </table>
