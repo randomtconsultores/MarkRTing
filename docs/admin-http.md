@@ -39,3 +39,19 @@ Nas mutacoes classificadas, o guard valida origem, cookie de sessao unico e um u
 Os testes `tests/test_admin_guard.py` exercitam o middleware com as fixtures de persistencia SQLite e PostgreSQL, incluindo autorizacao, sessoes invalidadas, CSRF/origem, rotas publicas, recusas sem operacoes de negocio, falha de persistencia e replay do corpo.
 
 Validacao reportada pelo utilizador para a versao final preparada no Copilot: 73 aprovados, 0 falhados, 0 ignorados e 0 erros em 11,89 s, executando tests/test_admin_guard.py e tests/test_admin_router.py sobre a base 0aa2add79ef85e075a7f6a61f970aed7c70d5aa8 com as alteracoes locais. Foram executados 36 casos PostgreSQL, 36 SQLite e 1 sem base de dados; git diff --check passou. Inclui a verificacao do tamanho antes de acumular o chunk e logs fixos sem traceback, com testes de chunks invalidos e marcadores sensiveis em falhas de relogio e persistencia. Este assistente nao executou testes nem a suite completa. main.py permanece inalterado.
+
+## Commit 3b — formularios administrativos
+
+Cada formulario administrativo de mutacao usa um unico campo hidden `csrf_token` de finalidade `admin`. O logout e exclusivamente um formulario `POST /logout`, com token de finalidade `logout`; nao e apresentado como ligacao GET. Os formularios publicos de subscricao, confirmacao e cancelamento e os eventos mantem os seus mecanismos proprios, sem receber tokens administrativos.
+
+### Contrato de contexto para 3c
+
+Para cada pagina administrativa, 3c fornece `admin_access` no contexto Jinja, construido exclusivamente depois de validar a sessao, a conta ativa e a versao de credenciais no servidor. A forma minima e um mapping com:
+
+- `role`: exatamente `admin` ou `viewer`, derivado da conta validada;
+- `admin_csrf_token`: token emitido por `CsrfTokens.issue(session_token, "admin", now=...)`; obrigatorio para o papel `admin`;
+- `logout_csrf_token`: token emitido por `CsrfTokens.issue(session_token, "logout", now=...)`; obrigatorio para `admin` e `viewer`.
+
+`session_token` acima e apenas o binding passado ao servico no servidor e nunca integra o mapping nem e exposto ao template. 3c nao pode aceitar papel, identidade ou tokens de CSRF de campos, cookies ou outros dados controlados pelo cliente. Os templates nao geram tokens nem presumem utilizador autenticado: se faltar `admin_access`, o papel nao for conhecido ou faltar o token exigido, ocultam os formularios/controlos correspondentes. `viewer` recebe consultas e logout, mas nao recebe controlos de mutacao. Ate 3c fornecer este contexto a partir do guard/sessao validados, as mutacoes administrativas permanecem ocultas; nao existe bypass de producao para os testes antigos.
+
+`tests/test_admin_templates.py` verifica renderizacao dos formularios administrativos e publicos com tokens reais de teste, escape, ausencia de segredos, contexto ausente e o metodo do endpoint de logout.
