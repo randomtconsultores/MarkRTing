@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Iniciar sessão — Mini-Marketo</title>
+</head>
+<body>
+  <main>
+    <h1>Iniciar sessão</h1>
+    {% if error %}<p role="alert">Não foi possível iniciar sessão.</p>{% endif %}
+    <form method="post" action="/login" enctype="application/x-www-form-urlencoded">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label for="username">Utilizador</label>
+      <input id="username" name="username" autocomplete="username" maxlength="128" required>
+      <label for="password">Palavra-passe</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Entrar</button>
+    </form>
+  </main>
+</body>
+</html>
