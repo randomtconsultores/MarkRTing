@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl
 
 
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import Headers
+from starlette.datastructures import Headers, MutableHeaders
 from starlette.responses import JSONResponse
 
 
@@ -114,17 +114,44 @@ class AdminAccessGuard:
 
 
         try:
-            role = await run_in_threadpool(self._resolve_role, session_token, timestamp)
+            access_context = await run_in_threadpool(
+                self._resolve_access_context, session_token, timestamp
+            )
         except Exception:
             _LOGGER.error("Falha ao validar a sessao administrativa.")
             await self._failure(scope, send, 503)
             return
-        if role is None or not role_allows(kind, role):
-            await self._failure(scope, send, 401 if role is None else 403)
+        if access_context is None or not role_allows(kind, access_context["role"]):
+            await self._failure(
+                scope, send, 401 if access_context is None else 403
+            )
             return
 
+        state = scope.setdefault("state", {})
+        if not isinstance(state, dict):
+            await self._failure(scope, send, 503)
+            return
+        state["admin_access"] = access_context
+        downstream_send = send
+        response_started = False
 
-        await self.app(scope, replay_receive, send)
+        async def private_send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+                headers = MutableHeaders(scope=message)
+                headers["Cache-Control"] = "no-store"
+                headers["Referrer-Policy"] = "no-referrer"
+                headers["X-Content-Type-Options"] = "nosniff"
+                headers["X-Frame-Options"] = "DENY"
+            await downstream_send(message)
+
+        try:
+            await self.app(scope, replay_receive, private_send)
+        except Exception:
+            _LOGGER.error("Falha ao processar um pedido administrativo.")
+            if not response_started:
+                await self._failure(scope, downstream_send, 500)
 
 
     def _now(self):
@@ -139,7 +166,7 @@ class AdminAccessGuard:
         return value
 
 
-    def _resolve_role(self, token, timestamp):
+    def _resolve_access_context(self, token, timestamp):
         with self.repo_factory() as repo:
             sessions = SessionService(
                 repo,
@@ -157,7 +184,25 @@ class AdminAccessGuard:
                 or user.credential_version != session.credential_version
             ):
                 return None
-            return user.role
+            admin_token = (
+                self.csrf.issue(token, "admin", now=timestamp)
+                if user.role == "admin"
+                else ""
+            )
+            logout_token = self.csrf.issue(token, "logout", now=timestamp)
+            admin_valid = user.role != "admin" or self.csrf.verify(
+                admin_token, token, "admin", now=timestamp
+            )
+            logout_valid = self.csrf.verify(
+                logout_token, token, "logout", now=timestamp
+            )
+            if not admin_valid or not logout_valid:
+                raise RuntimeError("Nao foi possivel emitir o contexto CSRF.")
+            return {
+                "role": user.role,
+                "admin_csrf_token": admin_token,
+                "logout_csrf_token": logout_token,
+            }
 
 
     @staticmethod
