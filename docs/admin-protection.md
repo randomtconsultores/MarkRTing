@@ -1,46 +1,62 @@
-# Protecao administrativa integrada — plano de tres commits
+# Proteção administrativa — matriz, limitador e integração
 
-Ramo: feat/etapa4-protecao-administrativa. Nao abrir PR de conclusao da protecao administrativa apenas com o primeiro ou segundo commit.
+## Estado atual — 20 de outubro de 2026
 
-## 1/3 — Matriz de autorizacao e inventario
+A matriz e o limitador persistente estão ligados à aplicação pelo router e guard integrados no PR #27. Login/logout, validação/revogação de sessões, cookies e CSRF nos formulários já não são trabalho futuro. O plano original em três commits pertence ao histórico de preparação; a integração HTTP foi detalhada em 3a/3b/3c.
 
-access_policy.py define classificacao explicita por metodo/caminho e permissoes. Caminhos desconhecidos, metodos nao previstos e caminhos ambiguos sao negados por omissao. As decisoes de papel so podem receber o papel da conta validada no servidor, nunca de formulario, query ou header enviado pelo utilizador.
+Contratos atuais: [admin-http.md](admin-http.md), [admin-accounts.md](admin-accounts.md) e [web-security.md](web-security.md). A etapa 4 não termina com acesso; dados pessoais e verificações operacionais permanecem no [roadmap](roadmap.md).
 
-- GET/HEAD das paginas de consulta e documentacao (/docs, /redoc, /openapi.json e retorno OAuth de docs): admin ou viewer.
-- GET/HEAD do formulario de edicao de segmento: apenas admin.
-- POST de contactos, empresas, consentimento, segmentos, campanhas e supressoes: apenas admin e finalidade CSRF admin.
-- Login: GET/HEAD e POST classificados separadamente; POST exige finalidade CSRF login na integracao.
-- Logout: apenas POST, conta autenticada admin/viewer e finalidade CSRF logout.
-- Subscricao, confirmacao, cancelamento, assets e POST /events/email mantem mecanismos proprios. Classificacao public nao autentica eventos nem valida tokens de ligacao: os handlers existentes continuam responsaveis por isso. Nao ha permissao publica por prefixo generico /subscribe.
+## Matriz de autorização e inventário
 
-HEAD segue a politica de GET, mas isto nao cria um handler HEAD nem garante que o framework o suporta numa determinada rota. A classificacao recebe o path descodificado sem query; nao normaliza nem descodifica novamente. Valores com controlos, percent-encoding residual, backslashes, query/fragmento ou segmentos . e .. falham fechados.
+`access_policy.py` classifica explicitamente método/caminho e permissões. Caminhos desconhecidos, métodos não previstos ou caminhos ambíguos são recusados por omissão. Papel provém da conta validada no servidor, nunca de formulário, query ou header do cliente.
 
-O teste estatico le main.py e verifica que cada rota declarada tem politica conhecida; novas rotas nao classificadas devem fazer o teste falhar. Roteamento dinamico e uso de app.api_route requerem revisao explicita. A matriz inclui ainda documentacao e assets, que nao aparecem nos 30 decorators atuais. O teste de inventario nao substitui verificacao HTTP do terceiro commit.
+- GET/HEAD de consultas e documentação (`/docs`, `/redoc`, `/openapi.json` e retorno OAuth de docs): admin ou viewer.
+- GET/HEAD de edição de segmento: apenas admin.
+- POST de contactos, empresas, consentimento, segmentos, campanhas e supressões: apenas admin e finalidade CSRF admin.
+- Login: GET/HEAD e POST classificados separadamente; POST exige CSRF login e verificações do router.
+- Logout: só POST, conta autenticada admin/viewer e CSRF logout.
+- Subscrição, confirmação, cancelamento, assets e POST `/events/email` conservam validadores próprios. `public` não autentica eventos ou valida ligações; não há permissão por prefixo genérico `/subscribe`.
 
-Verificacao: 63 casos aprovados em pacote temporario com Python 3.12.8, sem iniciar FastAPI, na execucao registada durante a preparacao. O main.py anexado foi conferido pelo hash Git 0f071400d028871b1c156010d9665f7a49b4d698, igual ao ficheiro remoto anteriormente lido. Foram cobertos os 30 decorators existentes, papeis, metodos, excecoes publicas, documentacao, CSRF e negacao por omissao. A suite completa nao foi executada aqui.
+HEAD segue a política de GET, mas não cria um handler ou garante suporte pelo framework. O path chega descodificado, sem query; não se normaliza ou descodifica outra vez. Controlos, percent-encoding residual, backslashes, query/fragmento e segmentos `.`/`..` falham fechados.
 
-Importante: este commit nao instala a matriz na aplicacao. Nao ha ainda middleware/guard que aplique estas decisoes aos pedidos; nenhuma rota fica protegida por importar este modulo.
+O teste estático de inventário verifica as rotas declaradas em `main.py`. Roteamento dinâmico e `app.api_route` exigem revisão explícita. Documentação e assets também são abrangidos. Esse teste não substitui verificações HTTP. `AdminAccessGuard`, agora montado, é quem aplica a política aos pedidos de negócio; importar a matriz isoladamente continua a não proteger rotas.
 
-## 2/3 — Tentativas persistentes
+## Tentativas persistentes
 
-A migracao v10 adiciona `admin_login_attempts`, sem alterar dados das tabelas existentes. Os repositorios SQLite e PostgreSQL reservam, numa unica transacao, os limites por conta, endereco IP e instalacao. Se algum limite recusar, as reservas parciais da tentativa sao revertidas. A reserva usa UPSERT condicional, nao uma leitura seguida de incremento; contadores saturados nao aumentam e uma janela expirada pode comecar de novo. `cleanup_expired_login_attempts(now)` remove linhas expiradas.
+A migração v10 acrescenta `admin_login_attempts`, sem transformar dados anteriores. SQLite e PostgreSQL reservam atomicamente os orçamentos por conta, IP e instalação. Se algum recusar, reservas parciais são revertidas. UPSERT condicional evita leitura seguida de incremento; saturados não aumentam e janela expirada pode recomeçar.
 
-`LoginAttemptLimiter` exige `LoginAttemptConfig` explicita. `LoginAttemptConfig.from_env()` exige todas estas variaveis, sem limites por omissao:
+`LoginAttemptLimiter` exige `LoginAttemptConfig` explícita. `from_env` não fornece valores por omissão:
 
-| Variavel | Significado |
+| Variável | Significado |
 | --- | --- |
-| `MINI_MARKETO_LOGIN_ATTEMPT_HMAC_KEY` | Chave secreta independente, com pelo menos 32 bytes UTF-8 |
-| `MINI_MARKETO_LOGIN_ATTEMPT_WINDOW_SECONDS` | Duracao positiva da janela |
-| `MINI_MARKETO_LOGIN_ATTEMPT_ACCOUNT_LIMIT` | Tentativas maximas por conta normalizada |
-| `MINI_MARKETO_LOGIN_ATTEMPT_IP_LIMIT` | Tentativas maximas por endereco IP |
-| `MINI_MARKETO_LOGIN_ATTEMPT_INSTALLATION_LIMIT` | Tentativas maximas para a instalacao |
+| `MINI_MARKETO_LOGIN_ATTEMPT_HMAC_KEY` | Segredo independente, pelo menos 32 bytes UTF-8 |
+| `MINI_MARKETO_LOGIN_ATTEMPT_WINDOW_SECONDS` | Janela positiva em segundos |
+| `MINI_MARKETO_LOGIN_ATTEMPT_ACCOUNT_LIMIT` | Máximo por conta normalizada |
+| `MINI_MARKETO_LOGIN_ATTEMPT_IP_LIMIT` | Máximo por IP |
+| `MINI_MARKETO_LOGIN_ATTEMPT_INSTALLATION_LIMIT` | Máximo por instalação |
 
-Todos os processos da mesma instalacao devem usar a mesma base de dados, chave HMAC e valores de configuracao. Gere e distribua a chave como segredo operacional; nao reutilize as chaves de CSRF, cancelamento ou subscricao. Os identificadores persistidos sao HMAC-SHA256 com contexto e ambito separados; username e IP nao sao guardados em claro. A normalizacao do username so e aplicada ao identificador do orcamento: a autenticacao deve receber o valor original. A limpeza pode ser agendada pelo operador, chamando o metodo do repositorio/servico com o tempo Unix atual.
+Os limites aceitam 1 a 2147483647, devido ao INTEGER da v10 PostgreSQL; não é um orçamento recomendado de produção. Mesma instalação exige base, chave HMAC e configuração coerentes entre processos. Não reutilizar chaves de CSRF, subscrição ou cancelamento. Identificadores persistidos são HMAC-SHA256 com contextos/âmbitos separados; username/IP não são guardados em claro pelo limitador. Normalização do identificador do orçamento não altera o username entregue à autenticação.
 
-Este commit nao liga o limitador ao `AuthenticationService` nem expoe login. A reserva deve ser chamada antes do hashing quando ocorrer a integracao web, no terceiro commit.
+No fluxo integrado, reserva precede hashing. Recusa responde 429 com Retry-After; sucesso de login não reinicia contadores. `AuthenticationService` isolado não aplica o limitador nem autoriza operações de negócio: a coordenação cabe ao router.
 
-## 3/3 — Integracao web
+## Limpeza e operação
 
-Aplicar a matriz antes de regras de negocio, ligar login/logout, validacao/revogacao das sessoes, cookies e CSRF a handlers e formularios. Integrar limitacao de tentativas, proteger documentacao de API, preservar fluxos publicos e testar negacao sem efeitos secundarios. A verificacao HTTP deve demonstrar que novas rotas nao ficam abertas por esquecimento. Evitar bypass de producao para conservar testes antigos: atualizar testes de interface conforme necessario.
+`cleanup_expired_login_attempts(now, batch_size=1000)` e o serviço correspondente processam um lote por chamada; a seleção ordena por expiração e hash e o DELETE revalida a expiração. Tamanho permitido: 1 a 10000; o teto limita linhas, não tempo de execução. A integração acrescentou limpeza limitada de sessões e CLI:
 
-So depois dos tres commits e da validacao integrada propor PR. O fecho global da etapa 4 continua a exigir tambem fluxos e politicas de dados pessoais previstos no roadmap. Manter administracao em rede privada ou proxy autenticado ate protecao integrada e verificada.
+```sh
+.venv/bin/python -m mini_marketo.admin_maintenance --batch-size 1000
+```
+
+O destino deve ser explícito e revisto; agendamento externo e repetições cabem ao operador. Não há scheduler ou limpeza ilimitada por pedido. Isto não implementa retenção geral de contactos/consentimentos/subscrições.
+
+Configuração administrativa inválida impede o arranque de toda a aplicação. Validar TLS, proxy, browser, segredos, limites, cópias de segurança e recuperação no ambiente de destino antes de exposição. Não retirar restrições de rede apenas porque testes passaram.
+
+## Histórico de verificação
+
+Inventário inicial: 63 aprovados em pacote temporário com Python 3.12.8, sem iniciar FastAPI. `main.py` conferido pelo hash `0f071400d028871b1c156010d9665f7a49b4d698`; cobriu os 30 decorators então existentes, papéis, métodos, exceções públicas, documentação e CSRF. Não era suite completa nem prova de proteção instalada naquele momento.
+
+Ajuste posterior do limitador: 33 aprovados com SQLite em pacote temporário; condições e limitações em [decisoes-etapa4.md](decisoes-etapa4.md).
+
+Integração final reportada pelo utilizador no Copilot para `e2012d850260c7f5ea74b41adb1d5ef1ea7704ad`, antes do merge: 999 aprovados com PostgreSQL em 69,36 s, incluindo dois testes de regressão do guard também aprovados isoladamente em 0,06 s. Diff-check desde a base do 3c passou. Não é suite completa, validação pós-merge ou ensaio de produção. O assistente não executou esses testes nem novos testes nesta revisão documental.
+
+O fecho global da etapa 4 continua a depender dos fluxos e políticas de dados pessoais e das verificações relevantes previstas no roadmap.

@@ -1,143 +1,106 @@
-# Integracao HTTP administrativa — tres commits
+# Integração HTTP administrativa
 
-Ramo: feat/etapa4-integracao-http. Nao fazer merge como protecao concluida antes da integracao e validacao finais.
+## Estado atual — 20 de outubro de 2026
 
-1. Parser limitado de formularios de login/logout e testes, sem montar rotas.
-2. Router de login/logout, formulario, sessoes, cookies, CSRF e limitador, com testes; ainda sem montagem na aplicacao publica.
-3. Ligacao conjunta do router e do guard global a aplicacao, tokens nos formularios administrativos e testes das rotas protegidas e publicas.
+Integração concluída e incorporada em `main` pelo PR #27, a partir de `feat/etapa4-integracao-http`. O plano original foi dividido em parser, router isolado e integração 3a/3b/3c; as notas de preparação abaixo são históricas, não pendências atuais de montagem.
 
-## Commit 1 — parser
+SHA validado antes do merge: `e2012d850260c7f5ea74b41adb1d5ef1ea7704ad`. Não equivale a fecho global da etapa 4 ou autorização para produção. Arranque: [README](../README.md). Gestão de contas: [admin-accounts.md](admin-accounts.md).
 
-read_login_form recebe o receive ASGI, Content-Type e limites obrigatorios max_bytes/max_fields. Limita os bytes durante a leitura, sem confiar em Content-Length, e limita os campos na descodificacao. Aceita apenas application/x-www-form-urlencoded, com charset UTF-8 opcional, e corpo ASCII com valores UTF-8 percent-encoded. Preserva espacos e restantes valores descodificados; rejeita nomes vazios, nomes descodificados duplicados, percent-encoding invalido, UTF-8 invalido e desconexao antes do fim. Nao serve para formularios de negocio com campos multivalor.
+## Componentes e responsabilidades
 
-LoginFormError tem status_code 400 (formulario invalido), 413 (corpo excessivo) ou 415 (tipo nao suportado); nao inclui valores recebidos na mensagem. O futuro handler deve converter estes erros em respostas HTTP e validar campos obrigatorios, origem, CSRF e credenciais. A leitura consome o fluxo: nao o ler novamente sem partilha do resultado ou replay controlado. Limites de tempo e de ligacoes pertencem tambem ao servidor/proxy; o teto de bytes nao os substitui.
+`create_app` monta sempre `create_access_router` e `AdminAccessGuard` conjuntamente. A matriz `access_policy` classifica os métodos/caminhos; não há autorização pública por importar módulos. Rotas não classificadas são recusadas. Documentação `/docs`, `/redoc` e `/openapi.json` exige sessão administrativa; políticas de HEAD não criam handlers onde não existem.
 
-Verificacao realizada: 24 testes aprovados em 0,03 s, num pacote temporario com o modulo real e mensagens ASGI simuladas, sem FastAPI ou base de dados. Nao foram executados testes HTTP de routers, SQLite/PostgreSQL ou a suite completa. No projeto, validar apenas com .venv/bin/python -m pytest -q -rs tests/test_login_form.py.
+O router expõe GET/HEAD `/login`, POST `/login` e POST `/logout`, excluídos do esquema OpenAPI. Recebe repositório por fábrica, configuração web, configuração do limitador, limite do corpo e relógio opcional. CSRF e HMAC de tentativas usam chaves independentes. Login/logout pertencem ao router; o guard não consome esses corpos.
 
-Este commit nao modifica main.py, nao cria endpoints, nao autentica pedidos e nao instala protecao nas rotas. A administracao deve continuar em rede privada ou atras de proxy autenticado enquanto faltar a integracao final.
+O guard protege consultas/edições/mutações antes de operações de negócio. Exige sessão persistida, conta ativa, papel permitido e versão de credenciais coincidente. `viewer` consulta e termina sessão; só `admin` edita/escreve. Erros de persistência, relógio ou emissão de contexto falham fechados com 503. Caminhos desconhecidos são recusados por omissão.
 
-## Commit 2 — router isolado
+## Parser e formulários de acesso
 
-create_access_router(repo_factory, web_config=..., login_config=..., max_form_bytes=..., clock=...) devolve um APIRouter com GET/HEAD /login, POST /login e POST /logout, excluidos do esquema OpenAPI. Recebe configuracao explicita e rejeita a mesma chave para CSRF e HMAC de tentativas. O limite max_form_bytes e obrigatorio e aplica-se ao corpo codificado, nao apenas a palavra-passe descodificada; o valor usado nos testes nao e uma politica de producao predefinida.
+`read_login_form` recebe o `receive` ASGI, Content-Type e limites obrigatórios `max_bytes`/`max_fields`. Limita bytes durante a leitura, sem confiar em Content-Length, e campos na descodificação. Aceita apenas `application/x-www-form-urlencoded`, com charset UTF-8 opcional e corpo ASCII contendo valores UTF-8 percent-encoded.
 
-O formulario autonomo usa Jinja2 com escape, nonce de pre-login e CSRF vinculado. Os POST verificam origem, cookies sem nomes duplicados, campos admitidos e CSRF antes das operacoes de acesso. O login usa o IP do scope ASGI, nao le X-Forwarded-For diretamente; configurar corretamente os proxies confiaveis continua obrigatorio. Uma recusa do limitador devolve 429 com Retry-After antes do hashing; falhas de credenciais usam 401 generico e falhas dos servicos de acesso usam 503 sem detalhes internos. Nao ha reset dos contadores no sucesso.
+Preserva espaços e valores descodificados. Rejeita nomes vazios/duplicados, percent-encoding ou UTF-8 inválidos e desconexão prematura. Não serve para formulários de negócio multivalor. `LoginFormError` distingue 400, 413 e 415 sem incluir entradas na mensagem. A leitura consome o fluxo: não repetir sem partilha/replay controlado. Limites de tempo e de ligações também pertencem ao servidor/proxy.
 
-A fabrica abre e fecha o repositorio dentro de cada chamada sincrona em run_in_threadpool. Ligacoes e hashing dos pedidos nao correm diretamente no event loop. Um sucesso emite nova sessao, revoga o token anterior fornecido pelo browser, limpa cookies antigos antes de definir o novo e usa safe_redirect. O logout exige CSRF da finalidade logout e sessao/conta ativa, papel conhecido e versao coerente antes de revogar e limpar cookies. A emissao e a revogacao anterior continuam a usar as transacoes dos servicos existentes, nao uma nova transacao atomica conjunta; uma falha apos emissao pode deixar uma sessao sem cookie entregue, a expirar/limpar. Isto nao autoriza acesso numa resposta de falha. A limpeza limitada e a sua execucao operacional ficam para o commit 3.
+O router admite apenas campos previstos e valida origem, cookies sem nomes duplicados e CSRF antes das operações de acesso. Login usa nonce de pré-login e CSRF próprio; falha de credenciais tem erro genérico 401. Limitação responde 429 com Retry-After antes do hashing; falhas dos serviços respondem 503 sem detalhes internos. Não se reiniciam contadores por um login bem-sucedido.
 
-Os testes preparados usam as fixtures reais SQLite/PostgreSQL, Argon2id e chamadas ASGI a uma FastAPI isolada. Cobrem os fluxos de acesso, recusas antes de persistencia/hashing, hashing em worker, cookies, rotacao, logout, expiracao/revogacao e escape do destino no formulario. Ainda nao verificam a protecao das rotas de negocio.
+O IP é o do scope ASGI; não se lê X-Forwarded-For diretamente. O operador deve configurar os proxies confiáveis. Um login bem-sucedido emite sessão nova, revoga o token anterior fornecido pelo browser, limpa cookies antes de definir o novo e aplica `safe_redirect`. Emissão e revogação anterior usam as transações existentes, não uma transação conjunta: falha depois da emissão pode deixar uma sessão sem cookie entregue, a expirar/limpar; não autoriza acesso numa resposta de falha.
 
-Por pedido do utilizador, nao foram executados testes, recolha, compilacao/verificacao de sintaxe ou renderizacao de templates nesta preparacao do HTTP 2/3. Nao se transportam resultados de um router anterior para esta implementacao. Toda a verificacao deste incremento fica para o Copilot, no ambiente do projeto e sobre o SHA efetivamente publicado. Com MINI_MARKETO_TEST_PG configurada para testes, executar apenas .venv/bin/python -m pytest -q -rs tests/test_admin_router.py tests/test_login_form.py, sem a suite completa. Reportar resultados reais, skips e casos PostgreSQL; nao expor credenciais.
+Logout é exclusivamente POST com finalidade CSRF `logout`, sessão/conta válidas, papel conhecido e versão coerente antes de revogar e limpar cookies. Não há ligação GET de logout.
 
-O router nao esta montado em main.py; a aplicacao atual nao passa a ter login ou guard por importar o modulo. A montagem conjunta, o guard global e os tokens nos formularios administrativos continuam no commit 3. Nao abrir PR intermedio nem fazer merge como integracao concluida antes desse passo e da validacao.
+## Corpos administrativos e replay
 
-## Commit 3a — guard isolado
+Nas mutações classificadas, o guard valida origem, cookie de sessão único e um único `csrf_token` de finalidade `admin`. O corpo é limitado a `application/x-www-form-urlencoded`; campos de negócio repetidos são preservados. Mensagens ASGI aceites são reproduzidas sem alteração para o handler, sem consumir novamente o corpo no router de acesso.
 
-`AdminAccessGuard` e um middleware ASGI independente; nao esta montado em `main.py`. Recebe `repo_factory`, `WebSecurityConfig`, `max_body_bytes`, `max_form_fields` e, opcionalmente, um relogio. Ambos os limites do corpo sao obrigatorios e nao definem valores de producao. As rotas sao classificadas exclusivamente por `access_policy`: rotas publicas seguem para os seus validadores proprios, rotas nao classificadas sao recusadas, e leituras/edicoes/escritas exigem sessao persistida, conta ativa, papel permitido e versao de credenciais coincidente. Erros de persistencia falham fechados com 503.
+Limites fixos deliberados em `main.py`:
 
-Nas mutacoes classificadas, o guard valida origem, cookie de sessao unico e um unico campo CSRF de finalidade administrativa antes de encaminhar o pedido. A leitura e limitada a formularios `application/x-www-form-urlencoded`; todos os campos, incluindo campos de negocio repetidos, sao aceites no encaminhamento. As mensagens ASGI lidas sao reproduzidas sem alteracao para o handler. `login` e `logout` passam intactos para o router de acesso, que conserva a responsabilidade pelas suas verificacoes de origem, formulario, CSRF e sessao; assim, o corpo nao e consumido duas vezes. A montagem conjunta e os tokens nos templates pertencem a 3b/3c.
+- Formulário de acesso: 4096 bytes; o parser de login admite até 4 campos, o de logout apenas o CSRF previsto pelo router.
+- Corpo administrativo: 4 MiB e 128 campos descodificados.
 
-Os testes `tests/test_admin_guard.py` exercitam o middleware com as fixtures de persistencia SQLite e PostgreSQL, incluindo autorizacao, sessoes invalidadas, CSRF/origem, rotas publicas, recusas sem operacoes de negocio, falha de persistencia e replay do corpo.
+As 10 linhas iniciais de critérios de segmentos ficam abaixo desse teto. Campanhas admitem `body_text` até 100000 e `body_html` até 200000 caracteres; UTF-8 percent-encoded pode ocupar cerca de 3,6 MB nesses dois campos, deixando margem dentro dos 4 MiB. Limites do proxy devem ser coordenados com estes limites e os tamanhos efetivos dos formulários.
 
-Validacao reportada pelo utilizador para a versao final preparada no Copilot: 73 aprovados, 0 falhados, 0 ignorados e 0 erros em 11,89 s, executando tests/test_admin_guard.py e tests/test_admin_router.py sobre a base 0aa2add79ef85e075a7f6a61f970aed7c70d5aa8 com as alteracoes locais. Foram executados 36 casos PostgreSQL, 36 SQLite e 1 sem base de dados; git diff --check passou. Inclui a verificacao do tamanho antes de acumular o chunk e logs fixos sem traceback, com testes de chunks invalidos e marcadores sensiveis em falhas de relogio e persistencia. Este assistente nao executou testes nem a suite completa. main.py permanece inalterado.
+## Contexto dos templates
 
-## Commit 3b — formularios administrativos
+Depois de resolver sessão e validar conta, papel e versão de credenciais, o guard coloca um mapping por pedido em `request.state.admin_access`:
 
-Cada formulario administrativo de mutacao usa um unico campo hidden `csrf_token` de finalidade `admin`. O logout e exclusivamente um formulario `POST /logout`, com token de finalidade `logout`; nao e apresentado como ligacao GET. Os formularios publicos de subscricao, confirmacao e cancelamento e os eventos mantem os seus mecanismos proprios, sem receber tokens administrativos.
+- `role`: exatamente `admin` ou `viewer`, da conta validada.
+- `admin_csrf_token`: emitido por `CsrfTokens.issue(session_token, "admin", now=...)` para admin; vazio para viewer.
+- `logout_csrf_token`: emitido com finalidade `logout`, para ambos os papéis.
 
-### Contrato de contexto para 3c
+O token bruto de sessão é apenas binding no servidor; nunca integra o mapping ou HTML. Contexto não é construído com papel, identidade ou tokens fornecidos pelo cliente. Não há cache de autorização entre pedidos nem variáveis Jinja globais mutáveis por utilizador.
 
-Para cada pagina administrativa, 3c fornece `admin_access` no contexto Jinja, construido exclusivamente depois de validar a sessao, a conta ativa e a versao de credenciais no servidor. A forma minima e um mapping com:
+Páginas administrativas e re-renderizações com erros recebem o contexto validado. A aplicação recusa contexto administrativo indisponível; isoladamente, os templates ocultam controlos quando faltam contexto/papel/token necessário. Ocultar controlos não substitui autorização no servidor. Cada formulário administrativo de mutação tem um único CSRF admin e o logout tem um único CSRF logout.
 
-- `role`: exatamente `admin` ou `viewer`, derivado da conta validada;
-- `admin_csrf_token`: token emitido por `CsrfTokens.issue(session_token, "admin", now=...)`; obrigatorio para o papel `admin`;
-- `logout_csrf_token`: token emitido por `CsrfTokens.issue(session_token, "logout", now=...)`; obrigatorio para `admin` e `viewer`.
+Formulários públicos de subscrição, confirmação e cancelamento não recebem CSRF administrativo e mantêm os próprios mecanismos. Eventos conservam autenticação própria; classificação pública não significa aceitação sem validação.
 
-`session_token` acima e apenas o binding passado ao servico no servidor e nunca integra o mapping nem e exposto ao template. 3c nao pode aceitar papel, identidade ou tokens de CSRF de campos, cookies ou outros dados controlados pelo cliente. Os templates nao geram tokens nem presumem utilizador autenticado: se faltar `admin_access`, o papel nao for conhecido ou faltar o token exigido, ocultam os formularios/controlos correspondentes. `viewer` recebe consultas e logout, mas nao recebe controlos de mutacao. Ate 3c fornecer este contexto a partir do guard/sessao validados, as mutacoes administrativas permanecem ocultas; nao existe bypass de producao para os testes antigos.
+## Respostas privadas e falhas
 
-`tests/test_admin_templates.py` verifica renderizacao dos formularios administrativos e publicos com tokens reais de teste, escape, ausencia de segredos, contexto ausente e o metodo do endpoint de logout.
+Respostas administrativas recebem Cache-Control=no-store, Referrer-Policy=no-referrer, X-Content-Type-Options=nosniff e X-Frame-Options=DENY. Guard e router aplicam as proteções nas suas responsabilidades; estes cabeçalhos não substituem escape, TLS ou autorização.
 
-## Commit 3c — integracao na aplicacao
+Se o handler falhar antes de iniciar a resposta, o guard devolve 500 genérico. Depois de `http.response.start`, regista a mensagem fixa e relança a exceção, sem tentar emitir outra resposta. O teste de regressão verifica ambos os casos e ausência do marcador sensível no log produzido pelo guard; não comprova sanitização de logs de todos os servidores/proxies externos.
 
-`create_app` monta sempre `create_access_router` e `AdminAccessGuard` como
-componentes conjuntos. A matriz `access_policy` continua a ser a unica fonte
-de classificacao/autorizacao: `/login` e `POST /logout` pertencem ao router,
-rotas publicas mantem os validadores proprios e caminhos/metodos nao
-classificados falham fechados. O middleware acrescenta cabecalhos privados a
-todas as respostas classificadas de negocio, incluindo erros. Nao torna
-`/docs`, `/redoc` ou `/openapi.json` publicos.
+## Configuração obrigatória
 
-### Configuracao obrigatoria e limites
+A configuração vem de objetos confiáveis injetados em `create_app` ou de:
 
-A aplicacao exige configuracao explicita no ambiente, ou objetos confiaveis
-injetados por quem chama `create_app`:
+- `WebSecurityConfig.from_env`: `MINI_MARKETO_ADMIN_ORIGIN`, `MINI_MARKETO_ADMIN_CSRF_KEY`, `MINI_MARKETO_ADMIN_SESSION_ABSOLUTE_SECONDS`, `MINI_MARKETO_ADMIN_SESSION_IDLE_SECONDS`, `MINI_MARKETO_ADMIN_CSRF_SECONDS`.
+- `LoginAttemptConfig.from_env`: `MINI_MARKETO_LOGIN_ATTEMPT_HMAC_KEY`, `MINI_MARKETO_LOGIN_ATTEMPT_WINDOW_SECONDS`, `MINI_MARKETO_LOGIN_ATTEMPT_ACCOUNT_LIMIT`, `MINI_MARKETO_LOGIN_ATTEMPT_IP_LIMIT`, `MINI_MARKETO_LOGIN_ATTEMPT_INSTALLATION_LIMIT`.
 
-- `MINI_MARKETO_ADMIN_ORIGIN`, `MINI_MARKETO_ADMIN_CSRF_KEY`,
-  `MINI_MARKETO_ADMIN_SESSION_ABSOLUTE_SECONDS`,
-  `MINI_MARKETO_ADMIN_SESSION_IDLE_SECONDS` e
-  `MINI_MARKETO_ADMIN_CSRF_SECONDS`, lidos por `WebSecurityConfig.from_env`;
-- `MINI_MARKETO_LOGIN_ATTEMPT_HMAC_KEY`,
-  `MINI_MARKETO_LOGIN_ATTEMPT_WINDOW_SECONDS`,
-  `MINI_MARKETO_LOGIN_ATTEMPT_ACCOUNT_LIMIT`,
-  `MINI_MARKETO_LOGIN_ATTEMPT_IP_LIMIT` e
-  `MINI_MARKETO_LOGIN_ATTEMPT_INSTALLATION_LIMIT`, lidos por
-  `LoginAttemptConfig.from_env`. A chave HMAC tem de ser diferente da chave
-  CSRF.
+Sem valores de produção predefinidos nem geração silenciosa de chaves. As chaves são independentes. HTTP só é admitido nos hosts locais literais suportados e com `MINI_MARKETO_ADMIN_ALLOW_HTTP_LOCAL=1`; HTTPS exige a exceção desligada. Durações, orçamentos e segredos são responsabilidade do operador.
 
-As chaves nao sao geradas pela aplicacao e valores de teste nao sao
-predefinicoes de producao. Configuracao ausente/invalida falha durante
-`create_app`, antes de a aplicacao servir pedidos. Como as rotas publicas e
-administrativas pertencem a mesma aplicacao ASGI, esse erro de arranque
-indisponibiliza tambem as rotas publicas; a alternativa nao e iniciar uma
-aplicacao desprotegida.
+Configuração ausente/inválida interrompe `create_app` antes de servir pedidos. Como páginas públicas e administração usam a mesma aplicação ASGI, esse erro indisponibiliza também as rotas públicas, em vez de iniciar uma aplicação desprotegida.
 
-Os limites sao deliberadamente fixos no codigo:
+## Persistência e manutenção
 
-- login: 4096 bytes e, no parser existente, no maximo 4 campos;
-- mutacoes administrativas: 4 MiB e no maximo 128 campos descodificados.
+`build_access_repository_factory` usa as migrações existentes e abre uma ligação nova por operação síncrona, SQLite ou PostgreSQL, fechada no mesmo contexto. As chamadas de acesso e hashing dos pedidos correm em workers. Serviços de domínio injetados exigem também uma `access_repo_factory` explícita; não se escolhe silenciosamente outra base administrativa.
 
-O formulario de login/logout ocupa muito menos que 4 KiB. Os formularios de
-segmentos reservam 10 linhas com tres campos repetidos por linha, alem dos
-metadados e do CSRF, ficando abaixo de 128 campos. O maior formulario,
-campanha, admite `body_text` de 100000 e `body_html` de 200000 caracteres.
-Mesmo no pior caso de caracteres Unicode codificados em UTF-8 e depois em
-percent-encoding, esses dois campos ocupam ate cerca de 3.6 MB; 4 MiB deixa
-margem para os restantes campos e a codificacao. O guard valida os limites
-durante a leitura e replaya as mensagens ASGI aceites sem alterar os campos
-repetidos.
-
-### Contexto de templates e persistencia
-
-Depois de resolver a sessao persistida e validar conta ativa, papel conhecido
-e versao de credenciais, o guard coloca em `request.state.admin_access` um
-mapping com `role`, `admin_csrf_token` e `logout_csrf_token`. O contexto e
-criado por pedido, ligado ao token apenas no servidor, e nunca inclui o token
-bruto da sessao. As paginas administrativas e as respetivas re-renderizacoes
-usam esse contexto; paginas publicas nao o recebem. Falhas do repositorio,
-relogio ou emissao CSRF respondem 503 sem prosseguir para operacoes de
-negocio.
-
-`build_access_repository_factory` usa as migracoes existentes e cria uma
-ligacao nova para cada operacao sincrona. As ligacoes SQLite/PostgreSQL sao
-fechadas no mesmo contexto de operacao e as chamadas de acesso correm em
-workers, nao no event loop. Quando servicos de dominio sao injetados,
-`create_app` exige tambem uma `access_repo_factory` explicita; nao e permitido
-misturar silenciosamente uma base administrativa diferente.
-
-O repositorio suporta limpeza limitada de sessoes e de tentativas expiradas.
-Executar operacionalmente, a partir do ambiente que aponta explicitamente
-para a base correta:
+Selecionar exatamente um destino explícito de base e revê-lo antes de executar:
 
 ```sh
-python -m mini_marketo.admin_maintenance --batch-size 1000
+.venv/bin/python -m mini_marketo.admin_maintenance --batch-size 1000
 ```
 
-Cada execucao remove no maximo um lote por tabela (entre 1 e 10000); executar
-novamente em tarefas operacionais agendadas externamente ate deixar de haver
-registos antigos. Nao ha scheduler nem limpeza ilimitada por pedido. Sessoes
-expiradas sao recusadas mesmo antes da limpeza. A limpeza nao substitui a
-revogacao imediata ao alterar estado, papel ou credenciais de uma conta.
+Cada execução remove no máximo um lote por tabela de sessões e tentativas expiradas, entre 1 e 10000. Agendamento externo e repetições são responsabilidade do operador. O teto limita linhas, não promete tempo máximo de consulta. Não há scheduler nem limpeza ilimitada por pedido. Sessões expiradas são recusadas mesmo antes da limpeza; revogação por gestão de conta é distinta da expiração. Esta manutenção não elimina contactos, histórico de consentimento ou pedidos de subscrição.
 
-Os testes de integracao do incremento 3c usam `create_app` real, sessao e
-tokens CSRF emitidos pelas primitivas existentes, e exercitam SQLite e
-PostgreSQL quando `MINI_MARKETO_TEST_PG` esta disponivel. Os testes unitarios
-de dominio permanecem independentes do guard.
+## Histórico de preparação e validação
+
+- Parser: 24 aprovados em 0,03 s num pacote temporário com módulo real e mensagens ASGI simuladas, sem FastAPI/base de dados; não era teste HTTP ou suite completa. Comando de projeto então indicado: `.venv/bin/python -m pytest -q -rs tests/test_login_form.py`.
+- Router isolado: por pedido do utilizador, o assistente não executou testes, recolha, compilação ou renderização nessa preparação. Os testes preparados cobriam SQLite/PostgreSQL, Argon2id, chamadas ASGI, workers, cookies, rotação, logout e redirecionamentos; a montagem ainda estava pendente nesse momento. Comando então indicado: `tests/test_admin_router.py tests/test_login_form.py` com Python da `.venv` e PostgreSQL de testes configurado.
+- Guard 3a: utilizador reportou 73 aprovados em 11,89 s para `tests/test_admin_guard.py tests/test_admin_router.py`, sobre a base `0aa2add79ef85e075a7f6a61f970aed7c70d5aa8` e alterações locais; 36 PostgreSQL, 36 SQLite e 1 sem base, sem falhas/skips/erros. Diff-check passou; incluía limite antes de acumular chunk e logs fixos sem traceback. Não era suite completa.
+- Templates 3b: utilizador reportou 8 aprovados em 1,22 s em `f11204e9bd67a249e16eee7b7c7ac5c7ffb35d6c`, com worktree isolado e imports desse checkout. Diff-check desde `9561e02971fcdc0b6575d6b4ac1f5f1e5f89ed52` passou. Sem persistência nesses testes de renderização.
+- Integração 3c: preparação reportada com 920 aprovados; seleção focada posterior no SHA publicado `31106dbb137a857d53b0e19f52a7ebdf1e51378f` teve 997 aprovados com PostgreSQL. Nessa versão identificaram-se exceção suprimida após o início da resposta e linha em branco extra na documentação; foram corrigidas antes da validação final.
+
+### Referência final antes do merge do PR #27
+
+Validação reportada pelo utilizador no Copilot em `e2012d850260c7f5ea74b41adb1d5ef1ea7704ad`, com worktree isolado, Python da `.venv`, imports do checkout, sem alterar código e preservando workspace original e `poetry.lock`:
+
+```sh
+pytest -q tests/test_admin_guard_response_errors.py
+# 2 aprovados em 0,06 s
+pytest -q tests/test_access*.py tests/test_login*.py tests/test_admin*.py tests/test_authentication*.py tests/test_session*.py tests/test_web*.py
+# 999 aprovados com PostgreSQL em 69,36 s, incluindo os dois anteriores
+ git diff --check f11204e9bd67a249e16eee7b7c7ac5c7ffb35d6c
+# passou sem erros
+```
+
+O espaço antes de `git` acima é apenas indentação de apresentação no bloco shell. Os comandos pytest são a forma abreviada reportada e usaram Python da `.venv`. A seleção de 999 difere da anterior de 920; não é suite completa. O assistente não executou os testes reportados nem novos testes para esta revisão documental. A validação não é sobre o merge, este commit documental ou um ambiente de produção.
+
+Permanecem as verificações operacionais e as políticas/fluxos de dados da etapa 4. Ver [roadmap.md](roadmap.md).
