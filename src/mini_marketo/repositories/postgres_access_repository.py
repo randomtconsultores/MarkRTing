@@ -155,3 +155,14 @@ class PostgresAccessRepository:
                 "ORDER BY expires_at, bucket_hash LIMIT %s) AND expires_at <= %s",
                 (now, batch_size, now),
             ).rowcount
+
+    def cleanup_expired_sessions(self, now, *, batch_size=1000):
+        """Remove at most one batch of expired sessions."""
+        validate_login_attempt_cleanup(now, batch_size)
+        with self.conn.transaction():
+            return self.conn.execute(
+                "DELETE FROM admin_sessions WHERE token_hash IN ("
+                "SELECT token_hash FROM admin_sessions WHERE expires_at <= %s "
+                "ORDER BY expires_at, token_hash LIMIT %s) AND expires_at <= %s",
+                (now, batch_size, now),
+            ).rowcount
