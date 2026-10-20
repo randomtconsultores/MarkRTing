@@ -55,3 +55,90 @@ Para cada pagina administrativa, 3c fornece `admin_access` no contexto Jinja, co
 `session_token` acima e apenas o binding passado ao servico no servidor e nunca integra o mapping nem e exposto ao template. 3c nao pode aceitar papel, identidade ou tokens de CSRF de campos, cookies ou outros dados controlados pelo cliente. Os templates nao geram tokens nem presumem utilizador autenticado: se faltar `admin_access`, o papel nao for conhecido ou faltar o token exigido, ocultam os formularios/controlos correspondentes. `viewer` recebe consultas e logout, mas nao recebe controlos de mutacao. Ate 3c fornecer este contexto a partir do guard/sessao validados, as mutacoes administrativas permanecem ocultas; nao existe bypass de producao para os testes antigos.
 
 `tests/test_admin_templates.py` verifica renderizacao dos formularios administrativos e publicos com tokens reais de teste, escape, ausencia de segredos, contexto ausente e o metodo do endpoint de logout.
+
+## Commit 3c — integracao na aplicacao
+
+`create_app` monta sempre `create_access_router` e `AdminAccessGuard` como
+componentes conjuntos. A matriz `access_policy` continua a ser a unica fonte
+de classificacao/autorizacao: `/login` e `POST /logout` pertencem ao router,
+rotas publicas mantem os validadores proprios e caminhos/metodos nao
+classificados falham fechados. O middleware acrescenta cabecalhos privados a
+todas as respostas classificadas de negocio, incluindo erros. Nao torna
+`/docs`, `/redoc` ou `/openapi.json` publicos.
+
+### Configuracao obrigatoria e limites
+
+A aplicacao exige configuracao explicita no ambiente, ou objetos confiaveis
+injetados por quem chama `create_app`:
+
+- `MINI_MARKETO_ADMIN_ORIGIN`, `MINI_MARKETO_ADMIN_CSRF_KEY`,
+  `MINI_MARKETO_ADMIN_SESSION_ABSOLUTE_SECONDS`,
+  `MINI_MARKETO_ADMIN_SESSION_IDLE_SECONDS` e
+  `MINI_MARKETO_ADMIN_CSRF_SECONDS`, lidos por `WebSecurityConfig.from_env`;
+- `MINI_MARKETO_LOGIN_ATTEMPT_HMAC_KEY`,
+  `MINI_MARKETO_LOGIN_ATTEMPT_WINDOW_SECONDS`,
+  `MINI_MARKETO_LOGIN_ATTEMPT_ACCOUNT_LIMIT`,
+  `MINI_MARKETO_LOGIN_ATTEMPT_IP_LIMIT` e
+  `MINI_MARKETO_LOGIN_ATTEMPT_INSTALLATION_LIMIT`, lidos por
+  `LoginAttemptConfig.from_env`. A chave HMAC tem de ser diferente da chave
+  CSRF.
+
+As chaves nao sao geradas pela aplicacao e valores de teste nao sao
+predefinicoes de producao. Configuracao ausente/invalida falha durante
+`create_app`, antes de a aplicacao servir pedidos. Como as rotas publicas e
+administrativas pertencem a mesma aplicacao ASGI, esse erro de arranque
+indisponibiliza tambem as rotas publicas; a alternativa nao e iniciar uma
+aplicacao desprotegida.
+
+Os limites sao deliberadamente fixos no codigo:
+
+- login: 4096 bytes e, no parser existente, no maximo 4 campos;
+- mutacoes administrativas: 4 MiB e no maximo 128 campos descodificados.
+
+O formulario de login/logout ocupa muito menos que 4 KiB. Os formularios de
+segmentos reservam 10 linhas com tres campos repetidos por linha, alem dos
+metadados e do CSRF, ficando abaixo de 128 campos. O maior formulario,
+campanha, admite `body_text` de 100000 e `body_html` de 200000 caracteres.
+Mesmo no pior caso de caracteres Unicode codificados em UTF-8 e depois em
+percent-encoding, esses dois campos ocupam ate cerca de 3.6 MB; 4 MiB deixa
+margem para os restantes campos e a codificacao. O guard valida os limites
+durante a leitura e replaya as mensagens ASGI aceites sem alterar os campos
+repetidos.
+
+### Contexto de templates e persistencia
+
+Depois de resolver a sessao persistida e validar conta ativa, papel conhecido
+e versao de credenciais, o guard coloca em `request.state.admin_access` um
+mapping com `role`, `admin_csrf_token` e `logout_csrf_token`. O contexto e
+criado por pedido, ligado ao token apenas no servidor, e nunca inclui o token
+bruto da sessao. As paginas administrativas e as respetivas re-renderizacoes
+usam esse contexto; paginas publicas nao o recebem. Falhas do repositorio,
+relogio ou emissao CSRF respondem 503 sem prosseguir para operacoes de
+negocio.
+
+`build_access_repository_factory` usa as migracoes existentes e cria uma
+ligacao nova para cada operacao sincrona. As ligacoes SQLite/PostgreSQL sao
+fechadas no mesmo contexto de operacao e as chamadas de acesso correm em
+workers, nao no event loop. Quando servicos de dominio sao injetados,
+`create_app` exige tambem uma `access_repo_factory` explicita; nao e permitido
+misturar silenciosamente uma base administrativa diferente.
+
+O repositorio suporta limpeza limitada de sessoes e de tentativas expiradas.
+Executar operacionalmente, a partir do ambiente que aponta explicitamente
+para a base correta:
+
+```sh
+python -m mini_marketo.admin_maintenance --batch-size 1000
+```
+
+Cada execucao remove no maximo um lote por tabela (entre 1 e 10000); executar
+novamente em tarefas operacionais agendadas externamente ate deixar de haver
+registos antigos. Nao ha scheduler nem limpeza ilimitada por pedido. Sessoes
+expiradas sao recusadas mesmo antes da limpeza. A limpeza nao substitui a
+revogacao imediata ao alterar estado, papel ou credenciais de uma conta.
+
+Os testes de integracao do incremento 3c usam `create_app` real, sessao e
+tokens CSRF emitidos pelas primitivas existentes, e exercitam SQLite e
+PostgreSQL quando `MINI_MARKETO_TEST_PG` esta disponivel. Os testes unitarios
+de dominio permanecem independentes do guard.
+
