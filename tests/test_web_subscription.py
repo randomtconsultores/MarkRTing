@@ -1,12 +1,11 @@
 from datetime import timedelta
 
 import pytest
-from fastapi.testclient import TestClient
+from admin_app_support import TestClient, create_app
 from test_delivery import LINKS, clear_environment
 from test_subscription import T0, make
 from test_subscription_confirm import TTL, build
 
-from mini_marketo.main import create_app
 from mini_marketo.subscription_links import SubscriptionLinks
 
 LINKS_OK = SubscriptionLinks(LINKS)
