@@ -1,6 +1,5 @@
-from fastapi.testclient import TestClient
+from admin_app_support import TestClient, create_app
 
-from mini_marketo.main import create_app
 
 NO_RECORD = '<span class="badge badge-none">Sem registo</span>'
 GRANTED = '<span class="badge badge-granted">Concedido</span>'
