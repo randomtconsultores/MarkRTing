@@ -2,9 +2,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from fastapi.testclient import TestClient
-
-from mini_marketo.main import create_app
+from admin_app_support import TestClient, create_app
 
 WORKERS = 12
 ROUNDS = 8
