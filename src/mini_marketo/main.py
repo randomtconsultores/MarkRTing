@@ -44,9 +44,16 @@ from .services.unsubscribe_service import UnsubscribeService
 from .subscription_delivery import load_privacy_url
 from .subscription_links import SubscriptionLinks
 from .unsubscribe import UnsubscribeLinks
+from .admin_guard import AdminAccessGuard
+from .admin_router import create_access_router
+from .services.login_attempt_limiter import LoginAttemptConfig
+from .web_security import WebSecurityConfig
 
 BASE = Path(__file__).parent
 DEFAULT_DB = Path(os.environ.get("MINI_MARKETO_DB", BASE.parent.parent / "data" / "mini_marketo.db"))
+ADMIN_LOGIN_FORM_MAX_BYTES = 4096
+ADMIN_BODY_MAX_BYTES = 4_194_304
+ADMIN_BODY_MAX_FIELDS = 128
 
 ServiceFactory = Callable[[], AbstractContextManager[ContactService]]
 SegmentFactory = Callable[[], AbstractContextManager[SegmentService]]
@@ -56,6 +63,7 @@ UnsubscribeFactory = Callable[[], AbstractContextManager[UnsubscribeService]]
 SuppressionFactory = Callable[[], AbstractContextManager[SuppressionService]]
 SubscriptionFactory = Callable[[], AbstractContextManager[SubscriptionService]]
 ConfirmationFactory = Callable[[], AbstractContextManager[ConfirmationService | None]]
+AccessRepositoryFactory = Callable[[], AbstractContextManager]
 
 EVENTS_TOKEN_MIN_LENGTH = 32
 MAX_EVENT_BYTES = 8192
@@ -152,6 +160,7 @@ def build_service_factory(db_path: str | Path, database_url: str | None = None) 
 
         return open_service
 
+
     if str(db_path) == ":memory:":
         raise ValueError(
             "':memory:' não serve com uma ligação por pedido (cada ligação veria outra base); "
@@ -172,6 +181,53 @@ def build_service_factory(db_path: str | Path, database_url: str | None = None) 
             conn.close()
 
     return open_service
+
+
+def build_access_repository_factory(
+    db_path: str | Path, database_url: str | None = None
+) -> AccessRepositoryFactory:
+    """Open a fresh access repository per synchronous operation."""
+    if database_url:
+        from .postgres_database import connect, init_db
+        from .repositories.postgres_access_repository import PostgresAccessRepository
+
+        setup_conn = connect(database_url)
+        try:
+            init_db(setup_conn)
+        finally:
+            setup_conn.close()
+
+        @contextmanager
+        def open_repository():
+            conn = connect(database_url)
+            try:
+                yield PostgresAccessRepository(conn)
+            finally:
+                conn.close()
+
+        return open_repository
+
+    if str(db_path) == ":memory:":
+        raise ValueError(
+            "':memory:' nao serve com repositorios por pedido; use uma base SQLite em ficheiro."
+        )
+    from .repositories.access_repository import AccessRepository
+
+    setup_conn = sqlite_connect(db_path)
+    try:
+        sqlite_init_db(setup_conn)
+    finally:
+        setup_conn.close()
+
+    @contextmanager
+    def open_repository():
+        conn = sqlite_connect(db_path)
+        try:
+            yield AccessRepository(conn)
+        finally:
+            conn.close()
+
+    return open_repository
 
 
 def build_segment_service_factory(
@@ -494,7 +550,44 @@ def create_app(
     subscription_service: SubscriptionService | None = None,
     confirmation_service: ConfirmationService | None = None,
     privacy_url: str | None = None,
+    *,
+    web_security_config: WebSecurityConfig | None = None,
+    login_attempt_config: LoginAttemptConfig | None = None,
+    access_repo_factory: AccessRepositoryFactory | None = None,
+    access_clock=None,
 ) -> FastAPI:
+    web_config = web_security_config or WebSecurityConfig.from_env()
+    login_config = login_attempt_config or LoginAttemptConfig.from_env()
+    if not isinstance(web_config, WebSecurityConfig) or not isinstance(
+        login_config, LoginAttemptConfig
+    ):
+        raise ValueError("Configuracao de acesso invalida.")
+    if hmac.compare_digest(web_config.csrf_key, login_config.hmac_key):
+        raise ValueError("As chaves CSRF e de limitacao devem ser independentes.")
+    if access_clock is not None and not callable(access_clock):
+        raise ValueError("O relogio de acesso deve ser invocavel.")
+    injected_services = any(
+        item is not None
+        for item in (
+            service,
+            segment_service,
+            consent_service,
+            campaign_service,
+            unsubscribe_service,
+            suppression_service,
+            subscription_service,
+            confirmation_service,
+        )
+    )
+    if injected_services and service is None:
+        raise ValueError("A injecao de servicos requer o servico de contactos.")
+    if injected_services and access_repo_factory is None:
+        raise ValueError(
+            "Servicos injetados requerem uma fabrica explicita do repositorio de acesso."
+        )
+    if access_repo_factory is not None and not callable(access_repo_factory):
+        raise ValueError("A fabrica do repositorio de acesso deve ser invocavel.")
+
     # Sem token explícito lê-se o ambiente; "" desativa o endpoint (útil nos testes).
     token = check_events_token(events_token) if events_token is not None else load_events_token()
     # Idem para a ligação da política de privacidade; "" não mostra nenhuma.
@@ -560,10 +653,48 @@ def create_app(
         open_subscriptions = build_subscription_service_factory(db_path, database_url)
         open_confirmation = build_confirmation_service_factory(db_path, database_url)
 
+    access_factory = access_repo_factory or build_access_repository_factory(
+        db_path, database_url
+    )
     templates = Jinja2Templates(directory=str(BASE / "templates"))
 
     app = FastAPI(title="Mini-Marketo")
+    app.state.access_repo_factory = access_factory
     app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
+    app.include_router(
+        create_access_router(
+            access_factory,
+            web_config=web_config,
+            login_config=login_config,
+            max_form_bytes=ADMIN_LOGIN_FORM_MAX_BYTES,
+            clock=access_clock,
+        )
+    )
+    app.add_middleware(
+        AdminAccessGuard,
+        repo_factory=access_factory,
+        web_config=web_config,
+        max_body_bytes=ADMIN_BODY_MAX_BYTES,
+        max_form_fields=ADMIN_BODY_MAX_FIELDS,
+        clock=access_clock,
+    )
+
+    def admin_access_context(request: Request) -> dict:
+        state = request.scope.get("state")
+        context = state.get("admin_access") if isinstance(state, dict) else None
+        if (
+            not isinstance(context, dict)
+            or context.get("role") not in ("admin", "viewer")
+            or not isinstance(context.get("admin_csrf_token"), str)
+            or (
+                context["role"] == "admin"
+                and not context["admin_csrf_token"]
+            )
+            or not isinstance(context.get("logout_csrf_token"), str)
+            or not context["logout_csrf_token"]
+        ):
+            raise HTTPException(status_code=503, detail="Contexto administrativo indisponivel.")
+        return context
 
     def get_service() -> Iterator[ContactService]:
         with open_service() as svc:
@@ -610,7 +741,8 @@ def create_app(
     def page(request: Request, service: ContactService, error=None, form=None, status=200):
         return templates.TemplateResponse(
             request, "contacts.html",
-            {"contacts": service.list_contacts(), "companies": service.list_companies(),
+            {"admin_access": admin_access_context(request),
+             "contacts": service.list_contacts(), "companies": service.list_companies(),
              "error": error, "form": form or {}},
             status_code=status,
         )
@@ -618,7 +750,8 @@ def create_app(
     def segments_page(request: Request, segments: SegmentService, error=None, form=None, status=200):
         return templates.TemplateResponse(
             request, "segments.html",
-            {"segments": segments.list_with_counts(), "error": error,
+            {"admin_access": admin_access_context(request),
+             "segments": segments.list_with_counts(), "error": error,
              "form": form or new_segment_form(),
              "fields": FIELD_LABELS, "operators": OPERATOR_LABELS,
              "form_action": "/segments", "submit_label": "Guardar"},
@@ -628,7 +761,8 @@ def create_app(
     def edit_page(request: Request, segment: Segment, form: dict, error=None, status=200):
         return templates.TemplateResponse(
             request, "segment_edit.html",
-            {"segment": segment, "error": error, "form": form,
+            {"admin_access": admin_access_context(request),
+             "segment": segment, "error": error, "form": form,
              "fields": FIELD_LABELS, "operators": OPERATOR_LABELS,
              "form_action": f"/segments/{segment.id}/edit",
              "submit_label": "Guardar alterações"},
@@ -642,14 +776,17 @@ def create_app(
         except ContactNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return templates.TemplateResponse(
-            request, "consent.html", {**view, "error": error}, status_code=status
+            request, "consent.html",
+            {**view, "admin_access": admin_access_context(request), "error": error},
+            status_code=status
         )
 
     def campaigns_page(request: Request, campaigns: CampaignService, error=None, form=None,
                        status=200):
         return templates.TemplateResponse(
             request, "campaigns.html",
-            {"campaigns": campaigns.list_campaigns(), "segments": campaigns.list_segments(),
+            {"admin_access": admin_access_context(request),
+             "campaigns": campaigns.list_campaigns(), "segments": campaigns.list_segments(),
              "purposes": PURPOSES, "statuses": CAMPAIGN_STATUSES,
              "error": error, "form": form or {}},
             status_code=status,
@@ -663,7 +800,8 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return templates.TemplateResponse(
             request, "campaign.html",
-            {**view, "purposes": PURPOSES, "statuses": CAMPAIGN_STATUSES,
+            {**view, "admin_access": admin_access_context(request),
+             "purposes": PURPOSES, "statuses": CAMPAIGN_STATUSES,
              "message_statuses": MESSAGE_STATUSES, "skip_reasons": SKIP_REASONS,
              "error": error},
             status_code=status,
@@ -673,7 +811,8 @@ def create_app(
                           form=None, status=200):
         return templates.TemplateResponse(
             request, "suppressions.html",
-            {"suppressions": suppressions.list(), "reasons": SUPPRESSION_REASONS,
+            {"admin_access": admin_access_context(request),
+             "suppressions": suppressions.list(), "reasons": SUPPRESSION_REASONS,
              "sources": SUPPRESSION_SOURCES, "removable": REMOVABLE_REASONS,
              "error": error, "form": form or {}},
             status_code=status,
@@ -857,7 +996,8 @@ def create_app(
         )
         return templates.TemplateResponse(
             request, "segment.html",
-            {"segment": segment, "members": members, "sizes": PAGE_SIZES,
+            {"admin_access": admin_access_context(request),
+             "segment": segment, "members": members, "sizes": PAGE_SIZES,
              "fields": FIELD_LABELS, "operators": OPERATOR_LABELS},
         )
 
