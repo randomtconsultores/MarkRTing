@@ -1,7 +1,6 @@
 from campaign_support import Setup
-from fastapi.testclient import TestClient
+from admin_app_support import TestClient, create_app
 
-from mini_marketo.main import create_app
 
 
 def form(s, **overrides):

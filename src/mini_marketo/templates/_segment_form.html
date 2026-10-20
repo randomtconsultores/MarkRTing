@@ -1,4 +1,6 @@
+{% from "_admin_security.html" import csrf_field %}
 <form method="post" action="{{ form_action }}">
+  {{ csrf_field(admin_access.admin_csrf_token) }}
   <label>Nome <input name="name" value="{{ form.name }}" maxlength="100" required></label>
   <label>Descrição <input name="description" value="{{ form.description }}" maxlength="500"></label>
   <label>Um contacto entra se cumprir

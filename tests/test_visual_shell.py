@@ -1,6 +1,5 @@
-from fastapi.testclient import TestClient
+from admin_app_support import TestClient, create_app
 
-from mini_marketo.main import create_app
 
 
 def test_contacts_use_the_new_shell_and_accessible_table(service):

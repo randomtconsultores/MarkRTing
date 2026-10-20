@@ -1,9 +1,9 @@
 import pytest
 from campaign_support import Setup
-from fastapi.testclient import TestClient
+from admin_app_support import TestClient, create_app
 
 from mini_marketo.mailer import ConfigError
-from mini_marketo.main import create_app, load_events_token
+from mini_marketo.main import load_events_token
 
 TOKEN = "e" * 40
 AUTH = {"Authorization": f"Bearer {TOKEN}"}

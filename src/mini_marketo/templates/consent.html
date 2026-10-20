@@ -8,6 +8,8 @@
   <p><strong>{{ contact.first_name }} {{ contact.last_name }}</strong><br>Email principal: {{ contact.email }}</p>
 </div>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% from "_admin_security.html" import csrf_field %}
+{% set can_mutate = admin_access and admin_access.role == 'admin' and admin_access.admin_csrf_token %}
 
 <div class="contact-grid">
 <section class="panel" aria-labelledby="consent-state-title">
@@ -32,9 +34,11 @@
   {% endif %}
 </section>
 
+{% if can_mutate %}
 <section class="panel" aria-labelledby="consent-decision-title">
   <h2 id="consent-decision-title">Registar decisão</h2>
   <form method="post" action="/contacts/{{ contact.id }}/consent" class="contact-form">
+    {{ csrf_field(admin_access.admin_csrf_token) }}
     <label>Finalidade
       <select name="purpose">
         {% for key, label in purposes.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
@@ -48,6 +52,7 @@
     <button>Registar</button>
   </form>
 </section>
+{% endif %}
 </div>
 
 <section class="panel" aria-labelledby="consent-history-title">

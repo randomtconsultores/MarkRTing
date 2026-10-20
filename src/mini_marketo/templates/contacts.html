@@ -8,10 +8,14 @@
 </div>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 
+{% from "_admin_security.html" import csrf_field %}
+{% set can_mutate = admin_access and admin_access.role == 'admin' and admin_access.admin_csrf_token %}
+{% if can_mutate %}
 <div class="contact-grid">
 <section class="panel" aria-labelledby="new-contact-title">
   <h2 id="new-contact-title">Novo contacto</h2>
   <form method="post" action="/contacts" class="contact-form">
+    {{ csrf_field(admin_access.admin_csrf_token) }}
     <label>Nome <input name="first_name" value="{{ form.first_name or '' }}" required autocomplete="given-name"></label>
     <label>Apelido <input name="last_name" value="{{ form.last_name or '' }}" required autocomplete="family-name"></label>
     <label>Email <input type="email" name="email" value="{{ form.email or '' }}" required autocomplete="email"></label>
@@ -31,12 +35,14 @@
   <h2 id="new-company-title">Nova empresa</h2>
   <p class="hint">Crie uma empresa para a associar aos seus contactos.</p>
   <form method="post" action="/companies" class="contact-form">
+    {{ csrf_field(admin_access.admin_csrf_token) }}
     <label>Nome <input name="name" required></label>
     <label>Website <input name="website"></label>
     <button class="button-secondary">Guardar</button>
   </form>
 </section>
 </div>
+{% endif %}
 
 <section class="panel" aria-labelledby="contact-list-title">
   <h2 id="contact-list-title">Contactos ({{ contacts|length }})</h2>
@@ -53,25 +59,32 @@
             <li>{{ e }}
             {% if loop.first %}<span class="badge">principal</span>
             {% else %}
+              {% if can_mutate %}
               <form method="post" action="/contacts/{{ c.id }}/emails/primary" class="inline">
+                {{ csrf_field(admin_access.admin_csrf_token) }}
                 <input type="hidden" name="email" value="{{ e }}"><button class="button-secondary">tornar principal</button>
               </form>
               <form method="post" action="/contacts/{{ c.id }}/emails/remove" class="inline">
+                {{ csrf_field(admin_access.admin_csrf_token) }}
                 <input type="hidden" name="email" value="{{ e }}"><button class="button-danger">remover</button>
               </form>
+              {% endif %}
             {% endif %}
             </li>
           {% endfor %}
           </ul>
+          {% if can_mutate %}
           <form method="post" action="/contacts/{{ c.id }}/emails" class="inline">
+            {{ csrf_field(admin_access.admin_csrf_token) }}
             <input type="email" name="email" placeholder="novo email" aria-label="Novo email de {{ c.first_name }} {{ c.last_name }}" required><button class="button-secondary">Adicionar</button>
           </form>
+          {% endif %}
         </td>
         <td>{{ c.company_name or '—' }}</td>
         <td>{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="4" class="empty-state"><strong>Ainda não há contactos.</strong><p>Comece pelo formulário acima para adicionar o primeiro.</p></td></tr>
+      <tr><td colspan="4" class="empty-state"><strong>Ainda não há contactos.</strong>{% if can_mutate %}<p>Comece pelo formulário acima para adicionar o primeiro.</p>{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>

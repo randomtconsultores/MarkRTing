@@ -17,6 +17,13 @@
       <a href="{{ url }}"{% if active %} aria-current="page"{% endif %}>{{ label }}</a>
       {% endfor %}
     </nav>
+    {% if admin_access and admin_access.role in ('admin', 'viewer') and admin_access.logout_csrf_token %}
+    {% from "_admin_security.html" import csrf_field %}
+    <form method="post" action="/logout" class="inline">
+      {{ csrf_field(admin_access.logout_csrf_token) }}
+      <button type="submit" class="button-secondary">Terminar sessão</button>
+    </form>
+    {% endif %}
   </header>
   <main id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>
 </body>
