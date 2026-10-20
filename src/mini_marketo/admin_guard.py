@@ -152,6 +152,8 @@ class AdminAccessGuard:
             _LOGGER.error("Falha ao processar um pedido administrativo.")
             if not response_started:
                 await self._failure(scope, downstream_send, 500)
+            else:
+                raise
 
 
     def _now(self):

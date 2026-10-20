@@ -141,4 +141,3 @@ Os testes de integracao do incremento 3c usam `create_app` real, sessao e
 tokens CSRF emitidos pelas primitivas existentes, e exercitam SQLite e
 PostgreSQL quando `MINI_MARKETO_TEST_PG` esta disponivel. Os testes unitarios
 de dominio permanecem independentes do guard.
-
