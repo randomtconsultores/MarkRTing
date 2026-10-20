@@ -1,33 +1,36 @@
-# Administracao local de contas
+# Administração local de contas
 
-Este incremento entrega gestao de contas pelo operador local; nao e uma interface web e nao conclui a etapa 4. O acesso ao sistema operativo e a base de dados e a fronteira de confianca. Nunca ligar AdminAccountService diretamente a uma rota sem autenticacao e autorizacao.
+## Estado atual — 20 de outubro de 2026
 
-## Operacoes
+Gestão local de contas e acesso HTTP administrativo estão integrados em `main`; o PR #27 concluiu a ligação de login/logout, guard, cookies, CSRF e autorização por rota. Esta ferramenta continua a ser uma CLI do operador, não uma interface web de gestão. Não conclui a etapa 4: fluxos e políticas de dados pessoais permanecem pendentes no [roadmap](roadmap.md).
 
-- create cria a primeira conta ou uma conta adicional, com papel admin/viewer explicito, sem credenciais predefinidas. Conta existente nunca e substituida; a restricao UNIQUE continua a proteger a corrida entre verificacao e insercao.
-- reset-password exige a versao observada, altera o hash e revoga todas as sessoes dessa conta na transacao do repositorio. Conserva papel e estado: nao reativa nem promove uma conta inativa/viewer.
-- set-role, enable e disable exigem versao observada e revogam sessoes. Mesmo uma repeticao do estado/papel atual incrementa versao e revoga por precaucao. Conflitos nao sao repetidos automaticamente.
-- revoke-sessions elimina as sessoes existentes e e idempotente, sem alterar palavra-passe, papel ou versao. Nao impede novo login, incluindo um login em curso; usar disable para impedir novas emissoes.
+O acesso ao sistema operativo e à base é a fronteira de confiança da CLI. Nunca ligar `AdminAccountService` diretamente a uma rota sem autenticação/autorização. Arranque: [README](../README.md); contrato integrado: [admin-http.md](admin-http.md).
 
-As operacoes locais podem desativar ou despromover o ultimo administrador. Nao se introduz uma contagem nao atomica que prometa impedir esse caso; a recuperacao e feita pelo operador autorizado via comando local. O servico nao elimina contas nem contactos de marketing.
+## Operações
 
-## Politica de palavras-passe
+- `create`: cria a primeira conta ou outra conta, com papel admin/viewer explícito, sem credenciais predefinidas. Não substitui contas existentes; UNIQUE protege corrida entre verificação e inserção.
+- `reset-password`: exige versão observada, altera o hash e revoga todas as sessões da conta na transação. Preserva papel/estado; não reativa ou promove uma conta inativa/viewer.
+- `set-role`, `enable`, `disable`: exigem versão observada e revogam sessões. Repetir papel/estado incrementa a versão e revoga por precaução. Conflitos não são repetidos automaticamente.
+- `revoke-sessions`: elimina sessões existentes de forma idempotente, sem alterar palavra-passe, papel ou versão. Não impede login novo ou já em curso; usar `disable` para impedir novas emissões.
 
-Minimo de 15 caracteres Unicode, pois este fluxo nao tem MFA; maximo de 4096 bytes UTF-8, coerente com passwords.py. Espacos e Unicode sao preservados, sem truncagem, remocao de espacos, composicao obrigatoria ou rotacao periodica arbitraria. A palavra-passe nao pode ser igual ao nome da conta, ignorando caixa. O nome segue o contrato canonico da autenticacao: 1 a 128 caracteres, UTF-8 valido, minusculas, sem NUL ou espacos exteriores.
+Pode desativar/despromover o último administrador; não há contagem não atómica que prometa impedir esse caso. Recuperação cabe ao operador autorizado via CLI. O serviço não elimina contas ou contactos de marketing.
 
-E obrigatoria uma lista local nao vazia de digests SHA-256 hexadecimais minusculos, um por linha, para bloquear palavras-passe comuns/comprometidas. O SHA-256 serve apenas de chave de consulta da lista; as contas continuam a guardar Argon2id com salt. Comparacao exata de UTF-8, sem normalizacao ou consulta externa. O operador fornece e mantem uma lista de origem confiavel, abrangencia adequada e atualizada; uma lista pequena ou desatualizada nao comprova protecao contra palavras-passe comprometidas. Nao e fornecida uma lista ficticia como se fosse adequada a producao. Nao usar os hashes Argon2 das contas neste ficheiro.
+## Política de palavras-passe
 
-Referencia: https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
+Mínimo de 15 caracteres Unicode, sem MFA neste fluxo; máximo de 4096 bytes UTF-8, coerente com `passwords.py`. Preserva espaços e Unicode, sem truncagem, remoção de espaços, composição obrigatória ou rotação periódica arbitrária. Palavra-passe não pode ser igual ao nome da conta, ignorando caixa. Nome canónico: 1 a 128 caracteres, UTF-8 válido, minúsculas, sem NUL ou espaços exteriores.
 
-## Comando
+É obrigatória uma lista local não vazia de digests SHA-256 hexadecimais minúsculos, um por linha, para bloquear palavras-passe comuns/comprometidas. SHA-256 é apenas chave de consulta da lista; contas guardam Argon2id com salt. Comparação exata de UTF-8, sem normalização ou consulta externa. Não colocar hashes Argon2 das contas nesse ficheiro.
 
-Usar .venv/bin/python -m mini_marketo.admin_accounts --help. As palavras-passe sao lidas duas vezes por getpass num terminal interativo; nao existem argumentos ou variaveis de ambiente para a palavra-passe da conta. O fallback de getpass com eco e rejeitado. Argumentos invalidos nao sao repetidos no erro para evitar mostrar um segredo passado acidentalmente. Nao usar capturas ou gravacao de terminal para estas operacoes.
+O operador fornece e atualiza uma lista de origem confiável e abrangência adequada. Uma lista pequena/desatualizada não comprova proteção; não se fornece lista fictícia como adequada a produção. Referência da conceção: https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
 
-Todas as operacoes exigem terminal interativo, confirmacao ADMIN e --blocklist valido. Define exatamente uma variavel de destino: MINI_MARKETO_DB para um ficheiro SQLite existente, ou MINI_MARKETO_DATABASE_URL para PostgreSQL. Nao existe fallback silencioso de destino e definir ambas e erro. O comando usa init_db existente: pode aplicar migracoes pendentes; fazer copia de seguranca e rever migracoes antes de usar numa base existente. Nao e um comando de criacao de cluster ou de base PostgreSQL.
+## Destino, bootstrap e comando
 
-Exemplos, depois de configurar o destino correto e a lista local:
+Inicializar/migrar o esquema pelo arranque controlado da aplicação antes do bootstrap. Para SQLite, a CLI exige um ficheiro existente. Não cria cluster ou base PostgreSQL.
+
+Definir exatamente uma variável de destino: `MINI_MARKETO_DB` (SQLite) ou `MINI_MARKETO_DATABASE_URL` (PostgreSQL). Ambas definidas é erro; não existe fallback silencioso. Usar o mesmo destino administrativo da aplicação. A CLI usa `init_db` existente e pode aplicar migrações pendentes: rever migrações e fazer backup antes de usar numa base existente.
 
 ```sh
+.venv/bin/python -m mini_marketo.admin_accounts --help
 .venv/bin/python -m mini_marketo.admin_accounts create operador --role admin --blocklist /caminho/blocked.sha256
 .venv/bin/python -m mini_marketo.admin_accounts reset-password operador --blocklist /caminho/blocked.sha256
 .venv/bin/python -m mini_marketo.admin_accounts set-role operador --role viewer --blocklist /caminho/blocked.sha256
@@ -36,28 +39,28 @@ Exemplos, depois de configurar o destino correto e a lista local:
 .venv/bin/python -m mini_marketo.admin_accounts revoke-sessions operador --blocklist /caminho/blocked.sha256
 ```
 
-Nao copiar um destino de testes para producao sem o rever. Nao guardar DSN, palavras-passe ou a lista de bloqueio privada da organizacao no Git. O comando imprime apenas resultado generico, nao registos, hashes, DSNs ou excecoes com parametros. Retorna 0 em sucesso e 2 em erro/cancelamento. Falhas nao provocam repeticao automatica; confirmar o estado antes de repetir, sobretudo se houver erro de comunicacao apos commit. A confirmacao textual nao substitui permissoes do sistema operativo. A ligacao fecha tambem perante falha de inicializacao.
+`/caminho/blocked.sha256` é marcador a substituir pela lista real. Todas as operações exigem terminal interativo, confirmação `ADMIN` e `--blocklist` válido. Palavras-passe são lidas duas vezes por `getpass`; não existem argumentos nem variáveis de ambiente para a palavra-passe da conta. Fallback com eco é rejeitado. Não gravar/capturar terminal durante estas operações.
 
-## Verificacao deste incremento
+Argumentos inválidos não são repetidos no erro. Não guardar DSN, palavras-passe ou lista privada da organização no Git. Só é impresso resultado genérico, não registos, hashes, DSNs ou exceções com parâmetros. Retorna 0 em sucesso e 2 em erro/cancelamento. Não há repetição automática; confirmar estado antes de repetir, sobretudo após erro de comunicação posterior ao commit. Confirmação textual não substitui permissões do sistema operativo. A ligação fecha mesmo perante falha de inicialização.
 
-82 casos aprovados em 0,85 s num pacote temporario, com repositorio SQLite e Argon2id reais, DDL de acesso v9 reproduzido e fixtures locais. Copias de access_repository.py e passwords.py conferidas pelos hashes Git. Os testes do comando simulam terminal, introducao de palavras-passe e abertura da ligacao; nao foi uma sessao manual com TTY nem uma execucao completa do projeto. Uma falha inicial de fixture de captura de terminal foi corrigida antes desta execucao aprovada.
+## Histórico e validação posterior
 
-Os testes preparados usam db do projeto para correr casos de persistencia e despacho do comando em SQLite/PostgreSQL; os testes de politica e preflight correm sem persistencia. Cobrem Unicode/bytes, bloqueio, duplicados e corrida de unicidade, estado/papel, revogacao isolada, versao obsoleta, alteracao durante hashing, falha de hashing, cancelamento, eco inseguro, fecho de ligacoes e supressao de segredos nos erros.
+Preparação original: 82 aprovados em 0,85 s num pacote temporário, com SQLite e Argon2id reais, DDL v9 reproduzido e fixtures locais; cópias de `access_repository.py` e `passwords.py` conferidas por hash Git. Uma falha inicial de fixture de captura foi corrigida. Os testes da CLI simulavam terminal, palavra-passe e abertura de ligação: não foi sessão manual com TTY ou suite completa, nem validação PostgreSQL naquele ambiente.
 
-PostgreSQL, migracoes reais pelo comando e regressao completa ainda nao executados neste ambiente. Validar na base de testes, com MINI_MARKETO_TEST_PG exportada, sem executar operacoes administrativas contra dados reais:
+Os testes preparados usam `db` para persistência/despacho SQLite/PostgreSQL e casos sem persistência para política/preflight. Cobrem Unicode/bytes, lista de bloqueio, duplicados/unicidade, estado/papel, versões, revogação, alteração durante hashing, falha de hashing, cancelamento, eco inseguro, fecho e erros sem segredos.
+
+A seleção focada reportada para `e2012d850260c7f5ea74b41adb1d5ef1ea7704ad` antes do PR #27 incluiu `tests/test_admin*.py` e `tests/test_access*.py`, com 999 aprovados com PostgreSQL no conjunto. Não atribuir os 999 apenas à CLI, nem apresentar como ensaio manual de produção. O assistente não executou esses testes; suite completa e validação operacional continuam distintas.
+
+Verificação focada possível no ambiente de testes, sem operações contra dados reais:
 
 ```sh
 .venv/bin/python -m pytest -q -rs tests/test_admin_account_service.py tests/test_admin_accounts_cli.py
-.venv/bin/python -m pytest -q -rs
 ```
 
-## Criterios ainda necessarios para fechar a etapa 4
+A suite completa SQLite/PostgreSQL só deve ser declarada aprovada quando efetivamente executada. Os exemplos documentais não foram executados nesta atualização.
 
-1. Login/logout web, cookies seguros, CSRF, redirecionamentos locais seguros e matriz admin/viewer por rota, incluindo documentacao de API. Negacao por omissao e preservacao das rotas publicas verificadas.
-2. Limitacao de tentativas coerente entre processos, politica de limpeza e duracoes de sessao configuradas; ensaio no ambiente de destino.
-3. Importacao/exportacao com validacao, duplicados e relatorio de erros, sem consentimento implicito.
-4. Remocao/anonimizacao considerando referencias de campanhas, consentimento e supressoes; decisao sobre remocao de empresas.
-5. Politica explicita de retencao, execucao segura e testes de preservacao de dados. Prazos de conservacao nao serao inventados a partir de requisitos tecnicos.
-6. Suite completa SQLite/PostgreSQL, testes de acesso negado e verificacao operacional relevante. Testes aprovados nao substituem os requisitos anteriores.
+## O que falta na etapa 4
 
-A administracao continua a exigir rede privada ou proxy autenticado. Nao marcar etapa 4 como concluida nem iniciar edicao publica da etapa 5 com base apenas neste incremento.
+A montagem HTTP e os mecanismos de acesso deixaram de ser pendências. Mantêm-se: ensaio no ambiente de destino, política de durações/orçamentos/segredos e limpeza operacional; importação/exportação sem consentimento implícito; remoção/anonimização e referências; remoção de empresas; política de retenção e execução segura; regressão completa quando exigida pelo âmbito.
+
+Não considerar o merge autorização de exposição pública. Manter as restrições de rede/proxy adequadas até validar o ambiente, sem confundir isso com ausência de autenticação na aplicação. Gestão de dados pessoais não está concluída e novos editores/integrações exigem autorização e revisão próprias.
